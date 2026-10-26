@@ -1,0 +1,21 @@
+# Database file — contains personal user data
+budgeting_app.db
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*.pyc
+
+# VSCode settings
+.vscode/
+
+# Virtual environment
+venv/
+env/
+
+# Windows system files
+Thumbs.db
+desktop.ini
+
+# MacOS system files
+.DS_Store
