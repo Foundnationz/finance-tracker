@@ -643,6 +643,143 @@ def make_frame(parent, bg="#f0f4f8", pady=5, padx=10):
     f.pack(pady=pady, padx=padx, fill="x")
     return f
 
+def open_add_category_popup(user_id, tx_type, dropdown_widget, dropdown_var, parent_window=None):
+    """
+    Opens a small popup to add a new category from any form.
+
+    Parameters:
+        user_id        — the logged-in user's ID
+        tx_type        — 'income' or 'expense' (which type to add)
+        dropdown_widget — the Combobox widget to refresh after saving
+        dropdown_var   — the StringVar linked to the dropdown
+        parent_window  — optional parent window (usually root or a Toplevel)
+
+    After saving, the dropdown refreshes and the new category
+    is automatically selected. All other form fields remain unchanged.
+    """
+    # Use root as parent if none given
+    parent = parent_window if parent_window else root
+
+    # Create the popup window
+    popup = tk.Toplevel(parent)
+    popup.title(f"Add {tx_type.capitalize()} Category")
+    popup.geometry("380x200")
+    popup.resizable(False, False)
+    popup.configure(bg="#f0f4f8")
+
+    # Tie popup to the parent window
+    popup.transient(parent)
+    popup.grab_set()
+
+    # ── Title ────────────────────────────────────────────────
+    tk.Label(
+        popup,
+        text=f"➕ Add New {tx_type.capitalize()} Category",
+        font=("Segoe UI", 13, "bold"),
+        bg="#f0f4f8", fg="#2b6cb0"
+    ).pack(pady=(15, 5))
+
+    tk.Label(
+        popup,
+        text="This category will be available in all relevant forms.",
+        font=("Segoe UI", 9, "italic"),
+        bg="#f0f4f8", fg="#718096"
+    ).pack()
+
+    # ── Name input ───────────────────────────────────────────
+    tk.Label(
+        popup,
+        text="Category Name:",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", padx=30, pady=(10, 0))
+
+    name_entry = make_entry(popup, width=30)
+    name_entry.pack(padx=30, pady=(2, 5))
+    name_entry.focus()  # Put cursor in the field automatically
+
+    # ── Message label ────────────────────────────────────────
+    msg_label = tk.Label(
+        popup, text="",
+        font=("Segoe UI", 10),
+        bg="#f0f4f8", fg="red",
+        wraplength=320
+    )
+    msg_label.pack(pady=5)
+
+    # ── Save function ─────────────────────────────────────────
+    def on_save():
+        new_cat = name_entry.get().strip()
+
+        # Validate not empty
+        if not new_cat:
+            msg_label.config(
+                text="❌ Category name cannot be empty.", fg="red")
+            return
+
+        # Validate length
+        if len(new_cat) > 30:
+            msg_label.config(
+                text="❌ Category name must be 30 characters or fewer.",
+                fg="red")
+            return
+
+        with get_db() as conn:
+            cursor = conn.cursor()
+
+            # Check for duplicate — same user, same type, same name
+            cursor.execute(
+                "SELECT 1 FROM categories WHERE user_id = ? AND type = ? AND name = ?",
+                (user_id, tx_type, new_cat)
+            )
+            if cursor.fetchone():
+                msg_label.config(
+                    text="❌ This category already exists.", fg="red")
+                return
+
+            # Save the new category
+            cursor.execute(
+                "INSERT INTO categories (user_id, type, name) VALUES (?, ?, ?)",
+                (user_id, tx_type, new_cat)
+            )
+            conn.commit()
+
+        # ── Refresh the dropdown after saving ────────────────
+        # Fetch updated category list for this type
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name FROM categories WHERE user_id = ? AND type = ?",
+                (user_id, tx_type)
+            )
+            updated_cats = [row[0] for row in cursor.fetchall()]
+
+        # Update the dropdown values without rebuilding the screen
+        dropdown_widget["values"] = updated_cats
+
+        # Auto-select the newly added category
+        dropdown_var.set(new_cat)
+
+        # Close the popup
+        popup.destroy()
+
+    # ── Buttons ───────────────────────────────────────────────
+    btn_frame = tk.Frame(popup, bg="#f0f4f8")
+    btn_frame.pack(pady=10)
+
+    make_button(
+        btn_frame, "✅ Save",
+        on_save, color="#38a169", width=12
+    ).pack(side="left", padx=5)
+
+    make_button(
+        btn_frame, "✖ Cancel",
+        popup.destroy, color="#718096", width=12
+    ).pack(side="left", padx=5)
+
+    # Allow Enter key to save
+    popup.bind("<Return>", lambda e: on_save())
+
 # ============================================================
 # AUTH CHOICE SCREEN
 # ============================================================
@@ -2207,15 +2344,28 @@ def show_edit_budget(user_id, budget_id):
         bg="#f0f4f8"
     ).pack(anchor="w", padx=20)
 
+    # Horizontal frame for dropdown and button side by side
+    cat_row = tk.Frame(body, bg="#f0f4f8")
+    cat_row.pack(anchor="w", padx=20, pady=(2, 10))
+
     categories    = get_expense_categories(user_id)
     category_var  = tk.StringVar(value=old_category)
     category_dd   = ttk.Combobox(
-        body,
+        cat_row,
         textvariable=category_var,
         values=categories,
-        state="readonly", width=28
+        state="readonly", width=25
     )
-    category_dd.pack(anchor="w", padx=20, pady=(2, 10))
+    category_dd.pack(side="left")
+
+    # Add Category button
+    make_button(
+        cat_row, "+ Add Category",
+        lambda: open_add_category_popup(
+            user_id, "expense", category_dd, category_var
+        ),
+        color="#3182ce", width=14
+    ).pack(side="left", padx=6)
 
     # ── Info note ─────────────────────────────────────────────
     note_frame = tk.Frame(body, bg="#ebf8ff", relief="solid", bd=1)
@@ -2854,13 +3004,35 @@ def show_category_list(user_id):
         if not cat:
             msg_label.config(text="❌ Select a category first.", fg="red")
             return
-        confirmed = messagebox.askyesno("Confirm", f"Delete category '{cat}'?")
+
+        # Determine which type this category belongs to
+        # so we only delete the correct one and not both
+        cat_type = None
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT type FROM categories WHERE user_id = ? AND name = ?",
+                (user_id, cat)
+            )
+            row = cursor.fetchone()
+            if row:
+                cat_type = row[0]
+
+        if not cat_type:
+            msg_label.config(text="❌ Category not found.", fg="red")
+            return
+
+        confirmed = messagebox.askyesno(
+            "Confirm",
+            f"Delete {cat_type} category '{cat}'?"
+        )
         if confirmed:
             with get_db() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "DELETE FROM categories WHERE user_id = ? AND name = ?",
-                    (user_id, cat)
+                    '''DELETE FROM categories 
+                       WHERE user_id = ? AND name = ? AND type = ?''',
+                    (user_id, cat, cat_type)
                 )
                 conn.commit()
             show_category_list(user_id)
@@ -3570,14 +3742,29 @@ def show_add_recurring(user_id):
                    bg="#f0f4f8", font=("Segoe UI", 10),
                    command=lambda: refresh_cats()).pack(side="left", padx=10)
 
-    # Category
+    # Category dropdown with Add Category button
     tk.Label(body, text="Category:",
              font=("Segoe UI", 10, "bold"),
              bg="#f0f4f8").pack(anchor="w")
+
+    # Horizontal frame for dropdown and button
+    cat_row = tk.Frame(body, bg="#f0f4f8")
+    cat_row.pack(anchor="w", pady=(2, 10))
+
     category_var = tk.StringVar()
-    category_dd = ttk.Combobox(body, textvariable=category_var,
-                               state="readonly", width=28)
-    category_dd.pack(anchor="w", pady=(2, 10))
+    category_dd = ttk.Combobox(cat_row, textvariable=category_var,
+                               state="readonly", width=25)
+    category_dd.pack(side="left")
+
+    # Add Category button — uses the currently selected type
+    # (income or expense) so it adds the correct category type
+    make_button(
+        cat_row, "+ Add Category",
+        lambda: open_add_category_popup(
+            user_id, type_var.get(), category_dd, category_var
+        ),
+        color="#3182ce", width=14
+    ).pack(side="left", padx=6)
 
     def refresh_cats():
         tx_type = type_var.get()
@@ -3826,14 +4013,27 @@ def show_edit_recurring(user_id, rec_id):
         bg="#f0f4f8"
     ).pack(anchor="w", padx=20)
 
+    # Horizontal frame for dropdown and button
+    cat_row = tk.Frame(body, bg="#f0f4f8")
+    cat_row.pack(anchor="w", padx=20, pady=(2, 10))
+
     category_var = tk.StringVar(value=old_category)
     category_dd  = ttk.Combobox(
-        body,
+        cat_row,
         textvariable=category_var,
         state="readonly",
-        width=28
+        width=25
     )
-    category_dd.pack(anchor="w", padx=20, pady=(2, 10))
+    category_dd.pack(side="left")
+
+    # Add Category button — uses currently selected type
+    make_button(
+        cat_row, "+ Add Category",
+        lambda: open_add_category_popup(
+            user_id, type_var.get(), category_dd, category_var
+        ),
+        color="#3182ce", width=14
+    ).pack(side="left", padx=6)
 
     def refresh_cats():
         """Refreshes category dropdown based on selected type."""
@@ -4567,14 +4767,28 @@ def show_add_subscription(user_id):
     name_entry = make_entry(body)
     name_entry.pack(anchor="w", pady=(2, 10))
 
-    # Category dropdown
+    # Category dropdown with Add Category button
     tk.Label(body, text="Category:", font=("Segoe UI", 10, "bold"),
              bg="#f0f4f8").pack(anchor="w")
+
+    # Horizontal frame for dropdown and button
+    cat_row = tk.Frame(body, bg="#f0f4f8")
+    cat_row.pack(anchor="w", pady=(2, 10))
+
     categories = get_expense_categories(user_id)
     category_var = tk.StringVar(value=categories[0] if categories else "General")
-    category_dd = ttk.Combobox(body, textvariable=category_var,
-                               values=categories, state="readonly", width=28)
-    category_dd.pack(anchor="w", pady=(2, 10))
+    category_dd = ttk.Combobox(cat_row, textvariable=category_var,
+                               values=categories, state="readonly", width=25)
+    category_dd.pack(side="left")
+
+    # Add Category button — expense categories only for subscriptions
+    make_button(
+        cat_row, "+ Add Category",
+        lambda: open_add_category_popup(
+            user_id, "expense", category_dd, category_var
+        ),
+        color="#3182ce", width=14
+    ).pack(side="left", padx=6)
 
     # Charge dates
     tk.Label(body, text="Charge Dates (comma separated day numbers e.g. 1,15):",
