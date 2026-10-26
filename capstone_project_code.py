@@ -2563,14 +2563,28 @@ def show_add_budget(user_id):
     amount_entry = make_entry(body)
     amount_entry.pack(anchor="w", pady=(2, 10))
 
-    # Category dropdown
+    # Category dropdown with Add Category button
     tk.Label(body, text="Category:", font=("Segoe UI", 10, "bold"),
              bg="#f0f4f8").pack(anchor="w")
+
+    # Horizontal frame to hold dropdown and button side by side
+    cat_row = tk.Frame(body, bg="#f0f4f8")
+    cat_row.pack(anchor="w", pady=(2, 10))
+
     categories = get_expense_categories(user_id)
     category_var = tk.StringVar(value=categories[0] if categories else "General")
-    category_dd = ttk.Combobox(body, textvariable=category_var,
-                               values=categories, state="readonly", width=28)
-    category_dd.pack(anchor="w", pady=(2, 10))
+    category_dd = ttk.Combobox(cat_row, textvariable=category_var,
+                               values=categories, state="readonly", width=25)
+    category_dd.pack(side="left")
+
+    # Add Category button — expense categories only for budgets
+    make_button(
+        cat_row, "+ Add Category",
+        lambda: open_add_category_popup(
+            user_id, "expense", category_dd, category_var
+        ),
+        color="#3182ce", width=14
+    ).pack(side="left", padx=6)
 
     msg_label = tk.Label(body, text="", font=("Segoe UI", 10),
                          bg="#f0f4f8", fg="red", wraplength=400)
