@@ -598,9 +598,16 @@ def launch_app():
 def clear_window():
     """
     Removes all widgets from the root window.
-    Called before building each new screen so old content is gone.
-    This is the tkinter equivalent of Colab's clear_output().
+
+    Mouse-wheel bindings are removed first so that an old
+    scrolling callback cannot try to access a destroyed canvas.
     """
+    # Remove global scrolling callbacks belonging to the old screen
+    root.unbind_all("<MouseWheel>")
+    root.unbind_all("<Button-4>")
+    root.unbind_all("<Button-5>")
+
+    # Destroy all widgets from the old screen
     for widget in root.winfo_children():
         widget.destroy()
 
@@ -632,7 +639,29 @@ def make_scrollable_frame(parent):
     # All these functions can now see 'canvas' properly
 
     def scroll(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        """
+        Scrolls only while this canvas still exists.
+
+        A screen change can destroy the canvas while a queued
+        mouse-wheel event is still waiting to run.
+        """
+        try:
+            if not canvas.winfo_exists():
+                return
+
+            # Windows normally reports event.delta in multiples of 120.
+            direction = int(-1 * (event.delta / 120))
+
+            # Some devices may report a smaller delta.
+            if direction == 0:
+                direction = -1 if event.delta > 0 else 1
+
+            canvas.yview_scroll(direction, "units")
+
+        except tk.TclError:
+            # The canvas was destroyed before the queued event finished.
+            # Safely ignore that old event.
+            return
 
     def bind_scroll(widget):
         widget.bind("<MouseWheel>", scroll)
@@ -644,10 +673,16 @@ def make_scrollable_frame(parent):
         bind_scroll(scroll_frame)
 
     def on_enter(event):
-        canvas.bind_all("<MouseWheel>", scroll)
+        # Only activate scrolling if this canvas still exists.
+        try:
+            if canvas.winfo_exists():
+                root.bind_all("<MouseWheel>", scroll)
+        except tk.TclError:
+            pass
 
     def on_leave(event):
-        canvas.unbind_all("<MouseWheel>")
+        # Remove this screen's global mouse-wheel callback.
+        root.unbind_all("<MouseWheel>")
 
     canvas.bind("<MouseWheel>", scroll)
     scroll_frame.bind("<MouseWheel>", scroll)
@@ -1941,7 +1976,8 @@ def show_budgets(user_id):
         start_date  = budget[4]
         end_date    = budget[5]
         category    = budget[6]
-        amount      = budget[7]   # The budget limit
+        amount      = budget[7]   
+        notes       = budget[9] or ""# The budget limit
 
         # Get progress (now uncapped — can exceed 100)
         progress = calculate_budget_progress(budget_id, user_id)
@@ -2253,6 +2289,21 @@ def show_budgets(user_id):
             bg=card_bg, fg="#718096"
         ).pack(side="left")
 
+        # Display budget notes only if the user entered notes
+        if notes:
+            notes_row = tk.Frame(card, bg=card_bg)
+            notes_row.pack(fill="x", padx=15, pady=(0, 4))
+
+            tk.Label(
+                notes_row,
+                text=f"📝 Notes: {notes}",
+                font=("Segoe UI", 9, "italic"),
+                bg=card_bg,
+                fg="#4a5568",
+                wraplength=600,
+                justify="left"
+            ).pack(anchor="w")
+
         # ── Card action buttons ───────────────────────────────
         action_row = tk.Frame(card, bg=card_bg)
         action_row.pack(anchor="e", padx=10, pady=(0, 8))
@@ -2333,8 +2384,9 @@ def show_edit_budget(user_id, budget_id):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            '''SELECT budget_name, timeframe, category, amount
-               FROM budgets WHERE id = ? AND user_id = ?''',
+            '''SELECT budget_name, timeframe, category, amount, notes
+               FROM budgets
+               WHERE id = ? AND user_id = ?''',
             (budget_id, user_id)
         )
         row = cursor.fetchone()
@@ -2344,7 +2396,10 @@ def show_edit_budget(user_id, budget_id):
         show_budgets(user_id)
         return
 
-    old_name, old_timeframe, old_category, old_amount = row
+    (old_name, old_timeframe, old_category,
+     old_amount, old_notes) = row
+
+    old_notes = old_notes or ""
 
     # ── Header ───────────────────────────────────────────────
     header = tk.Frame(root, bg="#2b6cb0", pady=12)
@@ -2431,6 +2486,34 @@ def show_edit_budget(user_id, budget_id):
         color="#3182ce", width=14
     ).pack(side="left", padx=6)
 
+    # ── Budget notes ──────────────────────────────────────────
+    tk.Label(
+        body,
+        text="Notes (optional):",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", padx=20, pady=(2, 0))
+
+    tk.Label(
+        body,
+        text="Describe the purpose or scope of this budget.",
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8",
+        fg="#718096"
+    ).pack(anchor="w", padx=20)
+
+    notes_entry = tk.Text(
+        body,
+        height=3,
+        width=45,
+        font=("Segoe UI", 10),
+        relief="solid",
+        bd=1,
+        wrap="word"
+    )
+    notes_entry.insert("1.0", old_notes)
+    notes_entry.pack(anchor="w", padx=20, pady=(2, 10))
+
     # ── Info note ─────────────────────────────────────────────
     note_frame = tk.Frame(body, bg="#ebf8ff", relief="solid", bd=1)
     note_frame.pack(fill="x", padx=20, pady=5)
@@ -2455,6 +2538,7 @@ def show_edit_budget(user_id, budget_id):
         new_name      = name_entry.get().strip()
         new_timeframe = timeframe_var.get()
         new_category  = category_var.get()
+        new_notes     = notes_entry.get("1.0", tk.END).strip()
 
         # Validate name
         if not new_name:
@@ -2498,13 +2582,20 @@ def show_edit_budget(user_id, budget_id):
                        category    = ?,
                        amount      = ?,
                        start_date  = ?,
-                       end_date    = ?
+                       end_date    = ?,
+                       notes       = ?
                    WHERE id = ? AND user_id = ?''',
-                (new_name, new_timeframe, new_category,
-                 new_amount,
-                 start_date.strftime("%Y-%m-%d"),
-                 end_date.strftime("%Y-%m-%d"),
-                 budget_id, user_id)
+                (
+                    new_name,
+                    new_timeframe,
+                    new_category,
+                    new_amount,
+                    start_date.strftime("%Y-%m-%d"),
+                    end_date.strftime("%Y-%m-%d"),
+                    new_notes,
+                    budget_id,
+                    user_id
+                )
             )
             conn.commit()
 
@@ -2713,9 +2804,33 @@ def show_budget_spending(user_id, budget_id):
     scrollbar.pack(side="right", fill="y")
 
     def _on_mousewheel(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        try:
+            if not canvas.winfo_exists():
+                return
 
-    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            direction = int(-1 * (event.delta / 120))
+            if direction == 0:
+                direction = -1 if event.delta > 0 else 1
+
+            canvas.yview_scroll(direction, "units")
+
+        except tk.TclError:
+            return
+
+    def enable_popup_scroll(event=None):
+        try:
+            if canvas.winfo_exists():
+                root.bind_all("<MouseWheel>", _on_mousewheel)
+        except tk.TclError:
+            pass
+
+    def disable_popup_scroll(event=None):
+        root.unbind_all("<MouseWheel>")
+
+    canvas.bind("<Enter>", enable_popup_scroll)
+    canvas.bind("<Leave>", disable_popup_scroll)
+    scroll_frame.bind("<Enter>", enable_popup_scroll)
+    scroll_frame.bind("<Leave>", disable_popup_scroll)
 
     # ── Display each transaction ──────────────────────────────
     if not transactions:
@@ -2793,9 +2908,17 @@ def show_budget_spending(user_id, budget_id):
     btn_bar = tk.Frame(popup, bg="#f0f4f8", pady=10)
     btn_bar.pack(fill="x", padx=15)
 
+    def close_popup():
+        # Remove the popup's global scrolling callback first.
+        root.unbind_all("<MouseWheel>")
+        popup.destroy()
+
+    # Use the same cleanup if the user clicks the window's X button.
+    popup.protocol("WM_DELETE_WINDOW", close_popup)
+
     make_button(
         btn_bar, "✖ Close",
-        popup.destroy, color="#718096", width=12
+        close_popup, color="#718096", width=12
     ).pack()
 
 def get_budget_transactions(budget_id, user_id):
@@ -2906,8 +3029,14 @@ def show_add_budget(user_id):
     timeframe_dd.pack(anchor="w", pady=(2, 10))
 
     # Amount
-    tk.Label(body, text="Amount Limit ($):", font=("Segoe UI", 10, "bold"),
-             bg="#f0f4f8").pack(anchor="w")
+    sym = get_currency(user_id)
+
+    tk.Label(
+        body,
+        text=f"Amount Limit ({sym}):",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w")
     amount_entry = make_entry(body)
     amount_entry.pack(anchor="w", pady=(2, 10))
 
@@ -2934,6 +3063,33 @@ def show_add_budget(user_id):
         color="#3182ce", width=14
     ).pack(side="left", padx=6)
 
+     # ── Budget notes ──────────────────────────────────────────
+    tk.Label(
+        body,
+        text="Notes (optional):",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", pady=(2, 0))
+
+    tk.Label(
+        body,
+        text="Describe the purpose or scope of this budget.",
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8",
+        fg="#718096"
+    ).pack(anchor="w")
+
+    notes_entry = tk.Text(
+        body,
+        height=3,
+        width=45,
+        font=("Segoe UI", 10),
+        relief="solid",
+        bd=1,
+        wrap="word"
+    )
+    notes_entry.pack(anchor="w", pady=(2, 10))
+
     msg_label = tk.Label(body, text="", font=("Segoe UI", 10),
                          bg="#f0f4f8", fg="red", wraplength=400)
     msg_label.pack(pady=5)
@@ -2942,6 +3098,7 @@ def show_add_budget(user_id):
         name = name_entry.get().strip()
         timeframe = timeframe_var.get()
         category = category_var.get()
+        notes = notes_entry.get("1.0", tk.END).strip()
 
         if not name:
             msg_label.config(text="❌ Budget name cannot be empty.", fg="red")
@@ -2974,12 +3131,19 @@ def show_add_budget(user_id):
             cursor = conn.cursor()
             cursor.execute(
                 '''INSERT INTO budgets
-                   (user_id, budget_name, timeframe, start_date, end_date, category, amount)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (user_id, name, timeframe,
-                 start_date.strftime("%Y-%m-%d"),
-                 end_date.strftime("%Y-%m-%d"),
-                 category, amount)
+                   (user_id, budget_name, timeframe, start_date,
+                    end_date, category, amount, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (
+                    user_id,
+                    name,
+                    timeframe,
+                    start_date.strftime("%Y-%m-%d"),
+                    end_date.strftime("%Y-%m-%d"),
+                    category,
+                    amount,
+                    notes
+                )
             )
             conn.commit()
 
@@ -5010,9 +5174,33 @@ def show_recurring_history(user_id, rec_id, rec_name):
     scrollbar.pack(side="right", fill="y")
 
     def _on_mousewheel(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        try:
+            if not canvas.winfo_exists():
+                return
 
-    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            direction = int(-1 * (event.delta / 120))
+            if direction == 0:
+                direction = -1 if event.delta > 0 else 1
+
+            canvas.yview_scroll(direction, "units")
+
+        except tk.TclError:
+            return
+
+    def enable_popup_scroll(event=None):
+        try:
+            if canvas.winfo_exists():
+                root.bind_all("<MouseWheel>", _on_mousewheel)
+        except tk.TclError:
+            pass
+
+    def disable_popup_scroll(event=None):
+        root.unbind_all("<MouseWheel>")
+
+    canvas.bind("<Enter>", enable_popup_scroll)
+    canvas.bind("<Leave>", disable_popup_scroll)
+    scroll_frame.bind("<Enter>", enable_popup_scroll)
+    scroll_frame.bind("<Leave>", disable_popup_scroll)
 
     # ── Display each transaction ──────────────────────────────
     if not history:
@@ -5094,9 +5282,17 @@ def show_recurring_history(user_id, rec_id, rec_name):
     btn_bar = tk.Frame(popup, bg="#f0f4f8", pady=10)
     btn_bar.pack(fill="x", padx=15)
 
+    def close_popup():
+        # Remove the popup's global scrolling callback first.
+        root.unbind_all("<MouseWheel>")
+        popup.destroy()
+
+    # Use the same cleanup if the user clicks the window's X button.
+    popup.protocol("WM_DELETE_WINDOW", close_popup)
+
     make_button(
         btn_bar, "✖ Close",
-        popup.destroy, color="#718096", width=12
+        close_popup, color="#718096", width=12
     ).pack()
 
 def toggle_recurring(user_id, rec_id, new_status):
@@ -6115,9 +6311,33 @@ def show_subscription_payments(user_id, sub_id, sub_name):
     scrollbar.pack(side="right", fill="y")
 
     def _on_mousewheel(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        try:
+            if not canvas.winfo_exists():
+                return
 
-    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            direction = int(-1 * (event.delta / 120))
+            if direction == 0:
+                direction = -1 if event.delta > 0 else 1
+
+            canvas.yview_scroll(direction, "units")
+
+        except tk.TclError:
+            return
+
+    def enable_popup_scroll(event=None):
+        try:
+            if canvas.winfo_exists():
+                root.bind_all("<MouseWheel>", _on_mousewheel)
+        except tk.TclError:
+            pass
+
+    def disable_popup_scroll(event=None):
+        root.unbind_all("<MouseWheel>")
+
+    canvas.bind("<Enter>", enable_popup_scroll)
+    canvas.bind("<Leave>", disable_popup_scroll)
+    scroll_frame.bind("<Enter>", enable_popup_scroll)
+    scroll_frame.bind("<Leave>", disable_popup_scroll)
 
     # ── Display each payment ──────────────────────────────────
     if not payments:
@@ -6195,9 +6415,17 @@ def show_subscription_payments(user_id, sub_id, sub_name):
     btn_bar = tk.Frame(popup, bg="#f0f4f8", pady=10)
     btn_bar.pack(fill="x", padx=15)
 
+    def close_popup():
+        # Remove the popup's global scrolling callback first.
+        root.unbind_all("<MouseWheel>")
+        popup.destroy()
+
+    # Use the same cleanup if the user clicks the window's X button.
+    popup.protocol("WM_DELETE_WINDOW", close_popup)
+
     make_button(
         btn_bar, "✖ Close",
-        popup.destroy, color="#718096", width=12
+        close_popup, color="#718096", width=12
     ).pack()
 
 def show_edit_subscription(user_id, sub_id):
