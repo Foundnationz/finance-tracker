@@ -165,6 +165,24 @@ def create_db():
         except sqlite3.OperationalError:
             pass
 
+        # Add notes column to subscriptions
+        try:
+            cursor.execute(
+                'ALTER TABLE subscriptions ADD COLUMN notes TEXT DEFAULT ""'
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        # Add necessity column to subscriptions
+        try:
+            cursor.execute(
+                'ALTER TABLE subscriptions ADD COLUMN necessity TEXT DEFAULT "unset"'
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+        
         # --- USERS TABLE ---
         # Stores login credentials and streak data for each user
         cursor.execute('''
@@ -5352,6 +5370,39 @@ def show_add_subscription(user_id):
     amount_entry = make_entry(body)
     amount_entry.pack(anchor="w", pady=(2, 10))
 
+    # ── Notes field ───────────────────────────────────────────
+    tk.Label(body, text="Notes (optional):",
+             font=("Segoe UI", 10, "bold"),
+             bg="#f0f4f8").pack(anchor="w")
+    tk.Label(body,
+             text="e.g. Student plan, Annual billing, Shared with family",
+             font=("Segoe UI", 8, "italic"),
+             bg="#f0f4f8", fg="#718096").pack(anchor="w")
+    notes_entry = make_entry(body, width=40)
+    notes_entry.pack(anchor="w", pady=(2, 10))
+
+    # ── Necessity field ───────────────────────────────────────
+    # Subscriptions are always expenses
+    tk.Label(body, text="Necessity:",
+             font=("Segoe UI", 10, "bold"),
+             bg="#f0f4f8").pack(anchor="w")
+    tk.Label(body,
+             text="Is this subscription a need or a want?",
+             font=("Segoe UI", 8, "italic"),
+             bg="#f0f4f8", fg="#718096").pack(anchor="w")
+    necessity_var = tk.StringVar(value="unset")
+    necessity_frame = tk.Frame(body, bg="#f0f4f8")
+    necessity_frame.pack(anchor="w", pady=(2, 10))
+    tk.Radiobutton(necessity_frame, text="✅ Need",
+                   variable=necessity_var, value="need",
+                   bg="#f0f4f8", font=("Segoe UI", 10)).pack(side="left")
+    tk.Radiobutton(necessity_frame, text="🛍️ Want",
+                   variable=necessity_var, value="want",
+                   bg="#f0f4f8", font=("Segoe UI", 10)).pack(side="left", padx=10)
+    tk.Radiobutton(necessity_frame, text="— Not set",
+                   variable=necessity_var, value="unset",
+                   bg="#f0f4f8", font=("Segoe UI", 10)).pack(side="left")
+
     # Account dropdown
     tk.Label(body, text="Account:", font=("Segoe UI", 10, "bold"),
              bg="#f0f4f8").pack(anchor="w")
@@ -5374,10 +5425,12 @@ def show_add_subscription(user_id):
     msg_label.pack(pady=5)
 
     def on_submit():
-        name = name_entry.get().strip()
-        category = category_var.get()
+        name        = name_entry.get().strip()
+        category    = category_var.get()
         charge_dates = dates_entry.get().strip()
-        account_id = account_options.get(account_var.get())
+        account_id  = account_options.get(account_var.get())
+        notes       = notes_entry.get().strip()
+        necessity   = necessity_var.get()
 
         # Validate name
         if not name:
@@ -5432,12 +5485,14 @@ def show_add_subscription(user_id):
                 msg_label.config(text="❌ Subscription name already exists.", fg="red")
                 return
 
-            # Insert subscription into database
+            # Insert subscription into database with new fields
             cursor.execute(
                 '''INSERT INTO subscriptions
-                   (user_id, subscription_name, category, amount, charge_dates)
-                   VALUES (?, ?, ?, ?, ?)''',
-                (user_id, name, category, amount, charge_dates)
+                   (user_id, subscription_name, category, amount,
+                    charge_dates, notes, necessity)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (user_id, name, category, amount,
+                 charge_dates, notes, necessity)
             )
             conn.commit()
 
@@ -5482,7 +5537,8 @@ def show_subscription_list(user_id):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            '''SELECT id, subscription_name, category, amount, charge_dates
+            '''SELECT id, subscription_name, category, amount,
+                      charge_dates, notes, necessity
                FROM subscriptions WHERE user_id = ?''',
             (user_id,)
         )
@@ -5509,7 +5565,12 @@ def show_subscription_list(user_id):
 
     # ── Subscription cards ────────────────────────────────────
     for sub in subscriptions:
-        sub_id, sub_name, category, amount, charge_dates = sub
+        (sub_id, sub_name, category, amount,
+         charge_dates, notes, necessity) = sub
+
+        # Fallback for rows created before new columns existed
+        notes     = notes     or ""
+        necessity = necessity or "unset"
 
         card = tk.Frame(body, bg="white", relief="solid", bd=1)
         card.pack(fill="x", padx=20, pady=6)
@@ -5520,6 +5581,7 @@ def show_subscription_list(user_id):
             font=("Segoe UI", 11, "bold"), bg="white"
         ).pack(anchor="w", padx=10, pady=(8, 2))
 
+        # Main details row
         tk.Label(
             card,
             text=(
@@ -5528,11 +5590,43 @@ def show_subscription_list(user_id):
                 f"Charge Days: {charge_dates}"
             ),
             font=("Segoe UI", 10), bg="white", fg="#4a5568"
-        ).pack(anchor="w", padx=10, pady=(0, 4))
+        ).pack(anchor="w", padx=10, pady=(0, 2))
+
+        # Notes row — only show if notes exist
+        if notes:
+            tk.Label(
+                card,
+                text=f"📝  {notes}",
+                font=("Segoe UI", 8, "italic"),
+                bg="white", fg="#4a5568",
+                wraplength=500, justify="left"
+            ).pack(anchor="w", padx=10, pady=(0, 2))
+
+        # Necessity badge — only show if set
+        if necessity != "unset":
+            nec_bg   = "#e9d8fd" if necessity == "want" else "#c6f6d5"
+            nec_text = "🛍️ Want" if necessity == "want" else "✅ Need"
+            tk.Label(
+                card,
+                text=nec_text,
+                font=("Segoe UI", 8, "bold"),
+                bg=nec_bg, fg="#2d3748",
+                relief="solid", bd=1,
+                padx=4, pady=1
+            ).pack(anchor="w", padx=10, pady=(0, 4))
 
         # ── Per-card action buttons ────────────────────────────
         action_row = tk.Frame(card, bg="white")
         action_row.pack(anchor="e", padx=10, pady=(0, 8))
+
+        # View Payments button — shows past charges for this subscription
+        make_button(
+            action_row, "🔍 View Payments",
+            lambda sid=sub_id, sname=sub_name: show_subscription_payments(
+                user_id, sid, sname
+            ),
+            color="#805ad5", width=16
+        ).pack(side="left", padx=3)
 
         make_button(
             action_row, "✏️ Edit",
@@ -5590,6 +5684,234 @@ def confirm_delete_subscription(user_id, sub_id, sub_name):
             conn.commit()
         show_subscription_list(user_id)
 
+def show_subscription_payments(user_id, sub_id, sub_name):
+    """
+    Shows a popup listing all past transactions recorded
+    for a specific subscription.
+
+    Matches transactions by category name — since subscriptions
+    currently store category as a name string and transactions
+    also store category as a name string, we match on that.
+    """
+    sym = get_currency(user_id)
+
+    # First get the subscription details
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''SELECT category, amount, charge_dates
+               FROM subscriptions
+               WHERE id = ? AND user_id = ?''',
+            (sub_id, user_id)
+        )
+        sub_row = cursor.fetchone()
+
+    if not sub_row:
+        messagebox.showerror("Error", "Subscription not found.")
+        return
+
+    sub_category, sub_amount, charge_dates = sub_row
+
+    # Fetch all expense transactions matching this subscription's category
+    # We match on category name since subscription_id is not stored
+    # on transactions — this is a known limitation
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''SELECT t.date, t.time, t.amount, t.notes,
+                      t.reference, t.necessity, a.account_name
+               FROM transactions t
+               JOIN accounts a ON t.account_id = a.id
+               WHERE t.user_id = ?
+               AND t.type = 'expense'
+               AND t.category = ?
+               ORDER BY t.date DESC, t.time DESC''',
+            (user_id, sub_category)
+        )
+        payments = cursor.fetchall()
+
+    total_paid = sum(p[2] for p in payments)
+
+    # ── Create popup ──────────────────────────────────────────
+    popup = tk.Toplevel(root)
+    popup.title(f"🔍 {sub_name} — Payment History")
+    popup.geometry("500x520")
+    popup.resizable(False, False)
+    popup.configure(bg="#f0f4f8")
+    popup.transient(root)
+    popup.grab_set()
+
+    # ── Header ────────────────────────────────────────────────
+    header = tk.Frame(popup, bg="#805ad5", pady=10)
+    header.pack(fill="x")
+
+    tk.Label(
+        header,
+        text=f"🔍 {sub_name}",
+        font=("Segoe UI", 14, "bold"),
+        bg="#805ad5", fg="white"
+    ).pack()
+
+    tk.Label(
+        header,
+        text=f"Category: {sub_category}  |  "
+             f"Charge Days: {charge_dates}",
+        font=("Segoe UI", 9),
+        bg="#805ad5", fg="#e9d8fd"
+    ).pack()
+
+    # ── Summary strip ─────────────────────────────────────────
+    summary = tk.Frame(popup, bg="white", relief="solid", bd=1)
+    summary.pack(fill="x", padx=15, pady=8)
+
+    summary_row = tk.Frame(summary, bg="white")
+    summary_row.pack(pady=8)
+
+    # Total paid column
+    total_col = tk.Frame(summary_row, bg="white")
+    total_col.pack(side="left", expand=True)
+    tk.Label(total_col, text="TOTAL PAID",
+             font=("Segoe UI", 8), bg="white", fg="#718096").pack()
+    tk.Label(total_col, text=f"{sym}{total_paid:,.2f}",
+             font=("Segoe UI", 11, "bold"), bg="white", fg="#805ad5").pack()
+
+    tk.Frame(summary_row, bg="#e2e8f0", width=1).pack(
+        side="left", fill="y", padx=10)
+
+    # Payment count column
+    count_col = tk.Frame(summary_row, bg="white")
+    count_col.pack(side="left", expand=True)
+    tk.Label(count_col, text="PAYMENTS",
+             font=("Segoe UI", 8), bg="white", fg="#718096").pack()
+    tk.Label(count_col, text=str(len(payments)),
+             font=("Segoe UI", 11, "bold"), bg="white", fg="#2b6cb0").pack()
+
+    tk.Frame(summary_row, bg="#e2e8f0", width=1).pack(
+        side="left", fill="y", padx=10)
+
+    # Amount per charge column
+    per_col = tk.Frame(summary_row, bg="white")
+    per_col.pack(side="left", expand=True)
+    tk.Label(per_col, text="PER CHARGE",
+             font=("Segoe UI", 8), bg="white", fg="#718096").pack()
+    tk.Label(per_col, text=f"{sym}{sub_amount:,.2f}",
+             font=("Segoe UI", 11, "bold"), bg="white", fg="#2d3748").pack()
+
+    # ── Info note ─────────────────────────────────────────────
+    tk.Label(
+        popup,
+        text=(
+            "ℹ️ Showing all expense transactions in the "
+            f"'{sub_category}' category."
+        ),
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8", fg="#718096"
+    ).pack(anchor="w", padx=15, pady=(0, 4))
+
+    # ── Scrollable payment list ───────────────────────────────
+    scroll_outer = tk.Frame(popup, bg="#f0f4f8")
+    scroll_outer.pack(fill="both", expand=True, padx=15)
+
+    canvas = tk.Canvas(scroll_outer, bg="#f0f4f8", highlightthickness=0)
+    scrollbar = ttk.Scrollbar(
+        scroll_outer, orient="vertical", command=canvas.yview)
+    scroll_frame = tk.Frame(canvas, bg="#f0f4f8")
+
+    scroll_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+    canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    def _on_mousewheel(event):
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+    # ── Display each payment ──────────────────────────────────
+    if not payments:
+        tk.Label(
+            scroll_frame,
+            text="No payments recorded yet for this subscription.",
+            font=("Segoe UI", 10),
+            bg="#f0f4f8", fg="#718096"
+        ).pack(pady=20)
+    else:
+        for payment in payments:
+            (pay_date, pay_time, pay_amount,
+             pay_notes, pay_reference, pay_necessity, pay_account) = payment
+
+            pay_notes     = pay_notes     or ""
+            pay_reference = pay_reference or ""
+            pay_necessity = pay_necessity or "unset"
+
+            # Card for each payment
+            pay_card = tk.Frame(scroll_frame, bg="white", relief="solid", bd=1)
+            pay_card.pack(fill="x", pady=3)
+
+            # Top row — date, time, amount
+            top = tk.Frame(pay_card, bg="white")
+            top.pack(fill="x", padx=8, pady=(6, 2))
+
+            tk.Label(
+                top,
+                text=f"{pay_date}  {pay_time}  |  {pay_account}",
+                font=("Segoe UI", 9, "bold"),
+                bg="white", fg="#2d3748"
+            ).pack(side="left")
+
+            tk.Label(
+                top,
+                text=f"-{sym}{pay_amount:,.2f}",
+                font=("Segoe UI", 9, "bold"),
+                bg="white", fg="#e53e3e"
+            ).pack(side="right")
+
+            # Necessity badge
+            if pay_necessity != "unset":
+                nec_bg   = "#e9d8fd" if pay_necessity == "want" else "#c6f6d5"
+                nec_text = "🛍️ Want" if pay_necessity == "want" else "✅ Need"
+                tk.Label(
+                    top, text=nec_text,
+                    font=("Segoe UI", 7, "bold"),
+                    bg=nec_bg, fg="#2d3748",
+                    relief="solid", bd=1, padx=3, pady=1
+                ).pack(side="right", padx=5)
+
+            # Notes row
+            if pay_notes:
+                tk.Label(
+                    pay_card,
+                    text=f"📝  {pay_notes}",
+                    font=("Segoe UI", 8, "italic"),
+                    bg="white", fg="#4a5568",
+                    wraplength=420, justify="left"
+                ).pack(anchor="w", padx=8, pady=1)
+
+            # Reference row
+            if pay_reference:
+                tk.Label(
+                    pay_card,
+                    text=f"🔖  Ref: {pay_reference}",
+                    font=("Segoe UI", 8),
+                    bg="white", fg="#4a5568"
+                ).pack(anchor="w", padx=8, pady=(1, 4))
+
+            # Bottom padding
+            tk.Frame(pay_card, bg="white", height=4).pack()
+
+    # ── Close button ──────────────────────────────────────────
+    btn_bar = tk.Frame(popup, bg="#f0f4f8", pady=10)
+    btn_bar.pack(fill="x", padx=15)
+
+    make_button(
+        btn_bar, "✖ Close",
+        popup.destroy, color="#718096", width=12
+    ).pack()
 
 def show_edit_subscription(user_id, sub_id):
     """
@@ -5602,7 +5924,8 @@ def show_edit_subscription(user_id, sub_id):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            '''SELECT subscription_name, category, amount, charge_dates
+            '''SELECT subscription_name, category, amount,
+                      charge_dates, notes, necessity
                FROM subscriptions WHERE id = ? AND user_id = ?''',
             (sub_id, user_id)
         )
@@ -5613,7 +5936,13 @@ def show_edit_subscription(user_id, sub_id):
         show_subscription_list(user_id)
         return
 
-    old_name, old_category, old_amount, old_dates = row
+    (old_name, old_category, old_amount,
+     old_dates, old_notes, old_necessity) = row
+
+    # Fallback for rows created before new columns existed
+    old_notes     = old_notes     or ""
+    old_necessity = old_necessity or "unset"
+
     sym = get_currency(user_id)
 
     # ── Header ───────────────────────────────────────────────
@@ -5707,6 +6036,49 @@ def show_edit_subscription(user_id, sub_id):
     amount_entry.insert(0, str(old_amount))  # Pre-fill existing amount
     amount_entry.pack(anchor="w", padx=20, pady=(2, 10))
 
+    # ── Notes field ───────────────────────────────────────────
+    tk.Label(
+        body,
+        text="Notes (optional):",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", padx=20)
+    tk.Label(
+        body,
+        text="e.g. Student plan, Annual billing, Shared with family",
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8", fg="#718096"
+    ).pack(anchor="w", padx=20)
+    notes_entry = make_entry(body, width=40)
+    notes_entry.insert(0, old_notes)   # Pre-fill existing notes
+    notes_entry.pack(anchor="w", padx=20, pady=(2, 10))
+
+    # ── Necessity field ───────────────────────────────────────
+    tk.Label(
+        body,
+        text="Necessity:",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", padx=20)
+    necessity_var = tk.StringVar(value=old_necessity)
+    necessity_frame = tk.Frame(body, bg="#f0f4f8")
+    necessity_frame.pack(anchor="w", padx=20, pady=(2, 10))
+    tk.Radiobutton(
+        necessity_frame, text="✅ Need",
+        variable=necessity_var, value="need",
+        bg="#f0f4f8", font=("Segoe UI", 10)
+    ).pack(side="left")
+    tk.Radiobutton(
+        necessity_frame, text="🛍️ Want",
+        variable=necessity_var, value="want",
+        bg="#f0f4f8", font=("Segoe UI", 10)
+    ).pack(side="left", padx=10)
+    tk.Radiobutton(
+        necessity_frame, text="— Not set",
+        variable=necessity_var, value="unset",
+        bg="#f0f4f8", font=("Segoe UI", 10)
+    ).pack(side="left")
+
     # ── Info note ─────────────────────────────────────────────
     note_frame = tk.Frame(body, bg="#ebf8ff", relief="solid", bd=1)
     note_frame.pack(fill="x", padx=20, pady=5)
@@ -5733,9 +6105,11 @@ def show_edit_subscription(user_id, sub_id):
 
     # ── Save function ─────────────────────────────────────────
     def on_save():
-        new_name     = name_entry.get().strip()
-        new_category = category_var.get()
-        new_dates    = dates_entry.get().strip()
+        new_name      = name_entry.get().strip()
+        new_category  = category_var.get()
+        new_dates     = dates_entry.get().strip()
+        new_notes     = notes_entry.get().strip()
+        new_necessity = necessity_var.get()
 
         # Validate name
         if not new_name:
@@ -5788,10 +6162,12 @@ def show_edit_subscription(user_id, sub_id):
             cursor.execute(
                 '''UPDATE subscriptions
                    SET subscription_name = ?, category = ?,
-                       amount = ?, charge_dates = ?
+                       amount = ?, charge_dates = ?,
+                       notes = ?, necessity = ?
                    WHERE id = ? AND user_id = ?''',
                 (new_name, new_category, new_amount,
-                 new_dates, sub_id, user_id)
+                 new_dates, new_notes, new_necessity,
+                 sub_id, user_id)
             )
             conn.commit()
 
