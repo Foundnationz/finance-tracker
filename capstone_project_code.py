@@ -3501,94 +3501,211 @@ def show_category_list(user_id):
 
     header = tk.Frame(root, bg="#2b6cb0", pady=12)
     header.pack(fill="x")
-    tk.Label(header, text="📋 Category List", font=("Segoe UI", 16, "bold"),
-             fg="white", bg="#2b6cb0").pack()
+
+    tk.Label(
+        header,
+        text="📋 Category List",
+        font=("Segoe UI", 16, "bold"),
+        fg="white",
+        bg="#2b6cb0"
+    ).pack()
+
+    # Reserve space for navigation before adding scrollable content.
+    btn_bar = tk.Frame(root, bg="#f0f4f8", pady=10)
+    btn_bar.pack(side="bottom", fill="x", padx=20)
 
     body = make_scrollable_frame(root)
 
+    # Load each category's ID, type and name.
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT name FROM categories WHERE user_id = ? AND type = 'income'",
+            '''SELECT id, type, name
+               FROM categories
+               WHERE user_id = ?
+               ORDER BY type, name COLLATE NOCASE, id''',
             (user_id,)
         )
-        income_cats = [row[0] for row in cursor.fetchall()]
-        cursor.execute(
-            "SELECT name FROM categories WHERE user_id = ? AND type = 'expense'",
-            (user_id,)
-        )
-        expense_cats = [row[0] for row in cursor.fetchall()]
+        categories = cursor.fetchall()
 
-    # Income section
-    tk.Label(body, text="💚 Income Categories", font=("Segoe UI", 11, "bold"),
-             bg="#f0f4f8", fg="#276749").pack(anchor="w", padx=20, pady=(10, 4))
-    for cat in income_cats:
-        tk.Label(body, text=f"  • {cat}", font=("Segoe UI", 10),
-                 bg="#f0f4f8").pack(anchor="w", padx=30)
+    income_cats = [
+        row for row in categories if row[1] == "income"
+    ]
+    expense_cats = [
+        row for row in categories if row[1] == "expense"
+    ]
 
-    # Expense section
-    tk.Label(body, text="🔴 Expense Categories", font=("Segoe UI", 11, "bold"),
-             bg="#f0f4f8", fg="#9b2c2c").pack(anchor="w", padx=20, pady=(15, 4))
-    for cat in expense_cats:
-        tk.Label(body, text=f"  • {cat}", font=("Segoe UI", 10),
-                 bg="#f0f4f8").pack(anchor="w", padx=30)
+    # ── Income categories ────────────────────────────────────
+    tk.Label(
+        body,
+        text="💚 Income Categories",
+        font=("Segoe UI", 11, "bold"),
+        bg="#f0f4f8",
+        fg="#276749"
+    ).pack(anchor="w", padx=20, pady=(10, 4))
 
-    # Delete category section
-    all_cats = income_cats + expense_cats
-    tk.Label(body, text="Delete a Category:", font=("Segoe UI", 10, "bold"),
-             bg="#f0f4f8").pack(anchor="w", padx=20, pady=(20, 4))
+    if income_cats:
+        for category_id, category_type, category_name in income_cats:
+            tk.Label(
+                body,
+                text=f"  • {category_name}",
+                font=("Segoe UI", 10),
+                bg="#f0f4f8"
+            ).pack(anchor="w", padx=30)
+    else:
+        tk.Label(
+            body,
+            text="No income categories yet.",
+            font=("Segoe UI", 10),
+            bg="#f0f4f8",
+            fg="#718096"
+        ).pack(anchor="w", padx=30)
 
-    selected = tk.StringVar(value=all_cats[0] if all_cats else "")
-    dropdown = ttk.Combobox(body, textvariable=selected,
-                            values=all_cats, state="readonly", width=28)
+    # ── Expense categories ───────────────────────────────────
+    tk.Label(
+        body,
+        text="🔴 Expense Categories",
+        font=("Segoe UI", 11, "bold"),
+        bg="#f0f4f8",
+        fg="#9b2c2c"
+    ).pack(anchor="w", padx=20, pady=(15, 4))
+
+    if expense_cats:
+        for category_id, category_type, category_name in expense_cats:
+            tk.Label(
+                body,
+                text=f"  • {category_name}",
+                font=("Segoe UI", 10),
+                bg="#f0f4f8"
+            ).pack(anchor="w", padx=30)
+    else:
+        tk.Label(
+            body,
+            text="No expense categories yet.",
+            font=("Segoe UI", 10),
+            bg="#f0f4f8",
+            fg="#718096"
+        ).pack(anchor="w", padx=30)
+
+    # ── Category selection ────────────────────────────────────
+    tk.Label(
+        body,
+        text="Delete a Category:",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", padx=20, pady=(20, 4))
+
+    # Keep the records and labels in the same order.
+    # dropdown.current() lets us retrieve the exact selected record.
+    category_labels = [
+        f"{category_type.capitalize()} — {category_name}"
+        for category_id, category_type, category_name in categories
+    ]
+
+    dropdown = ttk.Combobox(
+        body,
+        values=category_labels,
+        state="readonly",
+        width=38
+    )
     dropdown.pack(anchor="w", padx=20, pady=(0, 8))
 
-    msg_label = tk.Label(body, text="", font=("Segoe UI", 10),
-                         bg="#f0f4f8", fg="red")
+    if categories:
+        dropdown.current(0)
+
+    tk.Label(
+        body,
+        text=(
+            "Deleting a category removes it from future category lists.\n"
+            "Existing transactions, budgets and scheduled rules are not changed."
+        ),
+        font=("Segoe UI", 9, "italic"),
+        bg="#f0f4f8",
+        fg="#718096",
+        wraplength=500,
+        justify="left"
+    ).pack(anchor="w", padx=20, pady=(0, 8))
+
+    msg_label = tk.Label(
+        body,
+        text="",
+        font=("Segoe UI", 10),
+        bg="#f0f4f8",
+        fg="red",
+        wraplength=500
+    )
     msg_label.pack(anchor="w", padx=20)
 
     def on_delete():
-        cat = selected.get()
-        if not cat:
-            msg_label.config(text="❌ Select a category first.", fg="red")
-            return
+        selected_index = dropdown.current()
 
-        # Determine which type this category belongs to
-        # so we only delete the correct one and not both
-        cat_type = None
-        with get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT type FROM categories WHERE user_id = ? AND name = ?",
-                (user_id, cat)
+        if selected_index < 0:
+            msg_label.config(
+                text="❌ Select a category first.",
+                fg="red"
             )
-            row = cursor.fetchone()
-            if row:
-                cat_type = row[0]
-
-        if not cat_type:
-            msg_label.config(text="❌ Category not found.", fg="red")
             return
+
+        category_id, category_type, category_name = categories[selected_index]
 
         confirmed = messagebox.askyesno(
-            "Confirm",
-            f"Delete {cat_type} category '{cat}'?"
+            "Confirm Category Deletion",
+            (
+                f"Delete {category_type} category '{category_name}'?\n\n"
+                "It will be removed from future category lists.\n"
+                "Existing transactions, budgets and scheduled rules "
+                "will remain unchanged."
+            ),
+            parent=root
         )
-        if confirmed:
+
+        if not confirmed:
+            return
+
+        try:
             with get_db() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    '''DELETE FROM categories 
-                       WHERE user_id = ? AND name = ? AND type = ?''',
-                    (user_id, cat, cat_type)
+                    '''DELETE FROM categories
+                       WHERE id = ? AND user_id = ?''',
+                    (category_id, user_id)
                 )
+                deleted_count = cursor.rowcount
                 conn.commit()
-            show_category_list(user_id)
+        except sqlite3.Error:
+            msg_label.config(
+                text="❌ Could not delete the category. Please try again.",
+                fg="red"
+            )
+            return
 
-    btn_frame = tk.Frame(body, bg="#f0f4f8")
-    btn_frame.pack(anchor="w", padx=20, pady=8)
-    make_button(btn_frame, "🗑️ Delete Selected", on_delete, color="#e53e3e").pack(side="left", padx=5)
-    make_button(btn_frame, "← Back", lambda: show_add_transaction(user_id), color="#718096").pack(side="left", padx=5)
+        if deleted_count == 0:
+            messagebox.showinfo(
+                "Category Not Found",
+                "This category no longer exists. The list will refresh.",
+                parent=root
+            )
+
+        show_category_list(user_id)
+
+    # ── Fixed bottom buttons ──────────────────────────────────
+    delete_button = make_button(
+        btn_bar,
+        "🗑️ Delete Selected",
+        on_delete,
+        color="#e53e3e"
+    )
+    delete_button.pack(side="left", padx=5)
+
+    if not categories:
+        delete_button.config(state="disabled")
+
+    make_button(
+        btn_bar,
+        "← Back",
+        lambda: show_add_transaction(user_id),
+        color="#718096"
+    ).pack(side="left", padx=5)
 
 
 def show_transaction_history(user_id):
