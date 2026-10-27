@@ -2467,7 +2467,10 @@ def show_edit_budget(user_id, budget_id):
     cat_row = tk.Frame(body, bg="#f0f4f8")
     cat_row.pack(anchor="w", padx=20, pady=(2, 10))
 
-    categories    = get_expense_categories(user_id)
+    categories = get_expense_categories(user_id, include_all=True)
+    # Older budgets may still contain the previous special value.
+    if old_category == "General":
+        old_category = ALL_EXPENSE_CATEGORIES
     category_var  = tk.StringVar(value=old_category)
     category_dd   = ttk.Combobox(
         cat_row,
@@ -2658,7 +2661,7 @@ def calculate_budget_progress(budget_id, user_id):
             window_start = start_date
 
         # General = all expense categories, else filter by specific category
-        if category.lower() == "general":
+        if category in ("General", ALL_EXPENSE_CATEGORIES):
             cursor.execute(
                 "SELECT SUM(amount) FROM transactions WHERE user_id = ? AND type = 'expense' AND date >= ?",
                 (user_id, window_start)
@@ -2968,7 +2971,7 @@ def get_budget_transactions(budget_id, user_id):
             window_start = start_date
 
         # Fetch matching transactions
-        if category.lower() == "general":
+        if category in ("General", ALL_EXPENSE_CATEGORIES):
             cursor.execute(
                 '''SELECT category, amount, date, time, notes, reference, necessity
                    FROM transactions
@@ -2990,17 +2993,34 @@ def get_budget_transactions(budget_id, user_id):
 
     return transactions, total_spent, budget_limit, budget_name, category, timeframe, window_start
 
-def get_expense_categories(user_id):
+def get_expense_categories(user_id, include_all=False):
+    """
+    Returns the user's expense categories.
+
+    include_all=False:
+        Returns only real expense categories.
+        Used by subscriptions and recurring transactions.
+
+    include_all=True:
+        Also includes the special "All Expense Categories" option.
+        Used only by budgets.
+    """
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT DISTINCT name FROM categories WHERE user_id = ? AND type = 'expense'",
+            '''SELECT name
+               FROM categories
+               WHERE user_id = ? AND type = 'expense'
+               ORDER BY name COLLATE NOCASE''',
             (user_id,)
         )
         categories = [row[0] for row in cursor.fetchall()]
-        if "General" not in categories:
-            categories.append("General")
-        return categories
+
+    if include_all:
+        # Put the special budget option first.
+        categories.insert(0, ALL_EXPENSE_CATEGORIES)
+
+    return categories
 
 
 def show_add_budget(user_id):
@@ -3048,8 +3068,10 @@ def show_add_budget(user_id):
     cat_row = tk.Frame(body, bg="#f0f4f8")
     cat_row.pack(anchor="w", pady=(2, 10))
 
-    categories = get_expense_categories(user_id)
-    category_var = tk.StringVar(value=categories[0] if categories else "General")
+    categories = get_expense_categories(user_id, include_all=True)
+    category_var = tk.StringVar(
+        value=categories[0] if categories else ALL_EXPENSE_CATEGORIES
+    )
     category_dd = ttk.Combobox(cat_row, textvariable=category_var,
                                values=categories, state="readonly", width=25)
     category_dd.pack(side="left")
@@ -3935,6 +3957,10 @@ CURRENCIES = {
     "CHF — Swiss Franc":        "Fr",
     "HKD — Hong Kong Dollar":   "HK$",
 }
+
+# Special budget option that includes spending from every expense category.
+# This is not stored as a normal user-created category.
+ALL_EXPENSE_CATEGORIES = "All Expense Categories"
 
 # Whitelist of tables allowed to be cleared when deleting a user
 # If a table name is not in this set it will not be touched
