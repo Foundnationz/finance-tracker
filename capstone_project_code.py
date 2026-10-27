@@ -360,6 +360,19 @@ def create_db():
             )
         ''')
 
+        # Add budget notes for existing databases.
+        # Run this AFTER the budgets table has been created.
+        cursor.execute("PRAGMA table_info(budgets)")
+        budget_columns = {
+            column[1] for column in cursor.fetchall()
+        }
+
+        if "notes" not in budget_columns:
+            cursor.execute(
+                "ALTER TABLE budgets "
+                "ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
+            )
+
         conn.commit()
 
 # ============================================================
