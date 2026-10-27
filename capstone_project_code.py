@@ -137,6 +137,34 @@ def create_db():
         except sqlite3.OperationalError:
             pass
 
+        # Add notes column to recurring_transactions
+        try:
+            cursor.execute(
+                'ALTER TABLE recurring_transactions ADD COLUMN notes TEXT DEFAULT ""'
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        # Add tags column to recurring_transactions
+        # Stored as comma-separated string e.g. "fixed-cost, household"
+        try:
+            cursor.execute(
+                'ALTER TABLE recurring_transactions ADD COLUMN tags TEXT DEFAULT ""'
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        # Add necessity column to recurring_transactions
+        try:
+            cursor.execute(
+                'ALTER TABLE recurring_transactions ADD COLUMN necessity TEXT DEFAULT "unset"'
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
         # --- USERS TABLE ---
         # Stores login credentials and streak data for each user
         cursor.execute('''
@@ -3818,9 +3846,11 @@ def process_recurring_transactions(user_id):
         cursor = conn.cursor()
 
         # Get all active recurring transactions that are due
+        # Also fetch notes, tags and necessity from the recurring rule
         cursor.execute(
             '''SELECT id, account_id, type, category, amount,
-                      frequency, next_due_date, name
+                      frequency, next_due_date, name,
+                      notes, tags, necessity
                FROM recurring_transactions
                WHERE user_id = ? AND is_active = 1
                AND next_due_date <= ?''',
@@ -3830,7 +3860,13 @@ def process_recurring_transactions(user_id):
 
         for item in due_items:
             (rec_id, account_id, tx_type, category,
-             amount, frequency, next_due_date_str, name) = item
+             amount, frequency, next_due_date_str, name,
+             notes, tags, necessity) = item
+
+            # Fallback for rows created before columns existed
+            notes     = notes     or ""
+            tags      = tags      or ""
+            necessity = necessity or "unset"
 
             next_due = datetime.strptime(
                 next_due_date_str, "%Y-%m-%d"
@@ -3840,16 +3876,49 @@ def process_recurring_transactions(user_id):
             # This catches ALL missed dates not just one
             while next_due <= today:
 
-                # Insert this missed transaction
+                # Insert this missed transaction with notes and necessity
                 cursor.execute(
                     '''INSERT INTO transactions
                        (user_id, category, type, amount,
-                        date, time, account_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                        date, time, account_id, notes, necessity)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                     (user_id, category, tx_type, amount,
                      next_due.strftime("%Y-%m-%d"),
                      "00:00",
-                     account_id)
+                     account_id,
+                     f"Recurring: {name}" + (f" | {notes}" if notes else ""),
+                     necessity)
+                )
+
+                # Get the id of the transaction just inserted
+                # so we can save tags to it
+                new_tx_id = cursor.lastrowid
+
+                # Save tags from the recurring rule to this transaction
+                if tags:
+                    MAX_TAG_LENGTH = 30
+                    MAX_TAGS       = 10
+                    tag_list = [
+                        t.strip()
+                        for t in tags.split(",")
+                        if t.strip() and len(t.strip()) <= MAX_TAG_LENGTH
+                    ]
+                    tag_list = tag_list[:MAX_TAGS]
+                    for tag in tag_list:
+                        cursor.execute(
+                            '''INSERT INTO tags
+                               (transaction_id, user_id, tag_name)
+                               VALUES (?, ?, ?)''',
+                            (new_tx_id, user_id, tag)
+                        )
+
+                # Always add an auto tag so recurring transactions
+                # are identifiable in transaction history
+                cursor.execute(
+                    '''INSERT INTO tags
+                       (transaction_id, user_id, tag_name)
+                       VALUES (?, ?, ?)''',
+                    (new_tx_id, user_id, f"auto:{name}")
                 )
 
                 new_tx_id = cursor.lastrowid
@@ -3915,7 +3984,8 @@ def show_recurring_transactions(user_id):
         cursor.execute(
             '''SELECT r.id, r.name, r.type, r.category,
                       r.amount, r.frequency, r.next_due_date,
-                      r.is_active, a.account_name
+                      r.is_active, a.account_name,
+                      r.notes, r.tags, r.necessity
                FROM recurring_transactions r
                JOIN accounts a ON r.account_id = a.id
                WHERE r.user_id = ?
@@ -3938,7 +4008,13 @@ def show_recurring_transactions(user_id):
         for item in items:
             (rec_id, name, tx_type, category,
              amount, frequency, next_due,
-             is_active, account_name) = item
+             is_active, account_name,
+             notes, tags, necessity) = item
+
+            # Fallback for rows created before new columns existed
+            notes     = notes     or ""
+            tags      = tags      or ""
+            necessity = necessity or "unset"
 
             # Card colour — grey if paused, white if active
             card_bg = "white" if is_active else "#f7fafc"
@@ -3967,6 +4043,43 @@ def show_recurring_transactions(user_id):
                           f"Next due: {next_due}",
                      font=("Segoe UI", 9),
                      bg=card_bg, fg="#4a5568").pack(anchor="w", padx=10)
+
+            # Notes row — only show if notes exist
+            if notes:
+                tk.Label(card,
+                         text=f"📝  {notes}",
+                         font=("Segoe UI", 8, "italic"),
+                         bg=card_bg, fg="#4a5568",
+                         wraplength=500, justify="left"
+                         ).pack(anchor="w", padx=10, pady=(1, 0))
+
+            # Necessity badge — only show for expense recurring transactions
+            if tx_type == "expense" and necessity != "unset":
+                nec_bg   = "#e9d8fd" if necessity == "want" else "#c6f6d5"
+                nec_text = "🛍️ Want" if necessity == "want" else "✅ Need"
+                tk.Label(card,
+                         text=nec_text,
+                         font=("Segoe UI", 8, "bold"),
+                         bg=nec_bg, fg="#2d3748",
+                         relief="solid", bd=1,
+                         padx=4, pady=1
+                         ).pack(anchor="w", padx=10, pady=(2, 0))
+
+            # Tags row — only show if tags exist
+            if tags:
+                tags_row = tk.Frame(card, bg=card_bg)
+                tags_row.pack(anchor="w", padx=10, pady=(2, 0))
+                for tag in tags.split(","):
+                    tag = tag.strip()
+                    if tag:
+                        tk.Label(
+                            tags_row,
+                            text=f"#{tag}",
+                            font=("Segoe UI", 8, "bold"),
+                            bg="#ebf8ff", fg="#2b6cb0",
+                            relief="solid", bd=1,
+                            padx=4, pady=1
+                        ).pack(side="left", padx=2)
 
             # ── Action buttons row ────────────────────────────
             btn_row = tk.Frame(card, bg=card_bg)
@@ -4103,6 +4216,51 @@ def show_add_recurring(user_id):
                            state="readonly", width=20)
     freq_dd.pack(anchor="w", pady=(2, 10))
 
+    # ── Notes field ───────────────────────────────────────────
+    tk.Label(body, text="Notes (optional):",
+             font=("Segoe UI", 10, "bold"),
+             bg="#f0f4f8").pack(anchor="w")
+    tk.Label(body,
+             text="e.g. Monthly rent for apartment — included in each transaction",
+             font=("Segoe UI", 8, "italic"),
+             bg="#f0f4f8", fg="#718096").pack(anchor="w")
+    notes_entry = make_entry(body, width=40)
+    notes_entry.pack(anchor="w", pady=(2, 10))
+
+    # ── Tags field ────────────────────────────────────────────
+    tk.Label(body, text="Tags (optional):",
+             font=("Segoe UI", 10, "bold"),
+             bg="#f0f4f8").pack(anchor="w")
+    tk.Label(body,
+             text="Comma separated e.g. fixed-cost, household, work",
+             font=("Segoe UI", 8, "italic"),
+             bg="#f0f4f8", fg="#718096").pack(anchor="w")
+    tags_entry = make_entry(body, width=40)
+    tags_entry.pack(anchor="w", pady=(2, 10))
+
+    # ── Necessity field ───────────────────────────────────────
+    # Only relevant for expense recurring transactions
+    # Income recurring transactions will always save as "unset"
+    tk.Label(body, text="Necessity (for expenses only):",
+             font=("Segoe UI", 10, "bold"),
+             bg="#f0f4f8").pack(anchor="w")
+    tk.Label(body,
+             text="Is this recurring expense a need or a want?",
+             font=("Segoe UI", 8, "italic"),
+             bg="#f0f4f8", fg="#718096").pack(anchor="w")
+    necessity_var = tk.StringVar(value="unset")
+    necessity_frame = tk.Frame(body, bg="#f0f4f8")
+    necessity_frame.pack(anchor="w", pady=(2, 10))
+    tk.Radiobutton(necessity_frame, text="✅ Need",
+                   variable=necessity_var, value="need",
+                   bg="#f0f4f8", font=("Segoe UI", 10)).pack(side="left")
+    tk.Radiobutton(necessity_frame, text="🛍️ Want",
+                   variable=necessity_var, value="want",
+                   bg="#f0f4f8", font=("Segoe UI", 10)).pack(side="left", padx=10)
+    tk.Radiobutton(necessity_frame, text="— Not set",
+                   variable=necessity_var, value="unset",
+                   bg="#f0f4f8", font=("Segoe UI", 10)).pack(side="left")
+
     # Start date
     tk.Label(body, text="Start Date (YYYY-MM-DD):",
              font=("Segoe UI", 10, "bold"),
@@ -4136,12 +4294,20 @@ def show_add_recurring(user_id):
     msg_label.pack(pady=5)
 
     def on_submit():
-        name      = name_entry.get().strip()
-        tx_type   = type_var.get()
-        category  = category_var.get()
-        frequency = freq_var.get()
-        start     = start_entry.get().strip()
+        name       = name_entry.get().strip()
+        tx_type    = type_var.get()
+        category   = category_var.get()
+        frequency  = freq_var.get()
+        start      = start_entry.get().strip()
         account_id = account_options.get(account_var.get())
+        notes      = notes_entry.get().strip()
+        tags_raw   = tags_entry.get().strip()
+
+        # For income recurring transactions force necessity to unset
+        if tx_type == "income":
+            necessity = "unset"
+        else:
+            necessity = necessity_var.get()
 
         # Validate name
         if not name:
@@ -4188,11 +4354,13 @@ def show_add_recurring(user_id):
             cursor.execute(
                 '''INSERT INTO recurring_transactions
                    (user_id, account_id, type, category,
-                    amount, frequency, next_due_date, name)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                    amount, frequency, next_due_date, name,
+                    notes, tags, necessity)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (user_id, account_id, tx_type, category,
                  amount, frequency,
-                 start_date.strftime("%Y-%m-%d"), name)
+                 start_date.strftime("%Y-%m-%d"), name,
+                 notes, tags_raw, necessity)
             )
             conn.commit()
 
@@ -4222,7 +4390,8 @@ def show_edit_recurring(user_id, rec_id):
         cursor = conn.cursor()
         cursor.execute(
             '''SELECT name, type, category, amount,
-                      frequency, next_due_date, account_id
+                      frequency, next_due_date, account_id,
+                      notes, tags, necessity
                FROM recurring_transactions
                WHERE id = ? AND user_id = ?''',
             (rec_id, user_id)
@@ -4235,7 +4404,13 @@ def show_edit_recurring(user_id, rec_id):
         return
 
     (old_name, old_type, old_category, old_amount,
-     old_frequency, old_next_due, old_account_id) = row
+     old_frequency, old_next_due, old_account_id,
+     old_notes, old_tags, old_necessity) = row
+
+    # Fallback for rows created before new columns existed
+    old_notes     = old_notes     or ""
+    old_tags      = old_tags      or ""
+    old_necessity = old_necessity or "unset"
 
     sym = get_currency(user_id)
 
@@ -4388,6 +4563,66 @@ def show_edit_recurring(user_id, rec_id):
     )
     freq_dd.pack(anchor="w", padx=20, pady=(2, 10))
 
+    # ── Notes field ───────────────────────────────────────────
+    tk.Label(
+        body,
+        text="Notes (optional):",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", padx=20)
+    tk.Label(
+        body,
+        text="e.g. Monthly rent for apartment",
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8", fg="#718096"
+    ).pack(anchor="w", padx=20)
+    notes_entry = make_entry(body, width=40)
+    notes_entry.insert(0, old_notes)   # Pre-fill existing notes
+    notes_entry.pack(anchor="w", padx=20, pady=(2, 10))
+
+    # ── Tags field ────────────────────────────────────────────
+    tk.Label(
+        body,
+        text="Tags (optional):",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", padx=20)
+    tk.Label(
+        body,
+        text="Comma separated e.g. fixed-cost, household",
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8", fg="#718096"
+    ).pack(anchor="w", padx=20)
+    tags_entry = make_entry(body, width=40)
+    tags_entry.insert(0, old_tags)     # Pre-fill existing tags
+    tags_entry.pack(anchor="w", padx=20, pady=(2, 10))
+
+    # ── Necessity field ───────────────────────────────────────
+    tk.Label(
+        body,
+        text="Necessity (for expenses only):",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", padx=20)
+    necessity_var = tk.StringVar(value=old_necessity)
+    necessity_frame = tk.Frame(body, bg="#f0f4f8")
+    necessity_frame.pack(anchor="w", padx=20, pady=(2, 10))
+    tk.Radiobutton(
+        necessity_frame, text="✅ Need",
+        variable=necessity_var, value="need",
+        bg="#f0f4f8", font=("Segoe UI", 10)
+    ).pack(side="left")
+    tk.Radiobutton(
+        necessity_frame, text="🛍️ Want",
+        variable=necessity_var, value="want",
+        bg="#f0f4f8", font=("Segoe UI", 10)
+    ).pack(side="left", padx=10)
+    tk.Radiobutton(
+        necessity_frame, text="— Not set",
+        variable=necessity_var, value="unset",
+        bg="#f0f4f8", font=("Segoe UI", 10)
+    ).pack(side="left")
+
     # ── Next due date ─────────────────────────────────────────
     tk.Label(
         body,
@@ -4470,6 +4705,14 @@ def show_edit_recurring(user_id, rec_id):
         new_frequency = freq_var.get()
         new_due       = due_entry.get().strip()
         new_account   = account_options.get(account_var.get())
+        new_notes     = notes_entry.get().strip()
+        new_tags      = tags_entry.get().strip()
+
+        # For income recurring transactions force necessity to unset
+        if new_type == "income":
+            new_necessity = "unset"
+        else:
+            new_necessity = necessity_var.get()
 
         # Validate name
         if not new_name:
@@ -4521,11 +4764,15 @@ def show_edit_recurring(user_id, rec_id):
                        amount        = ?,
                        frequency     = ?,
                        next_due_date = ?,
-                       account_id    = ?
+                       account_id    = ?,
+                       notes         = ?,
+                       tags          = ?,
+                       necessity     = ?
                    WHERE id = ? AND user_id = ?''',
                 (new_name, new_type, new_category,
                  new_amount, new_frequency,
                  new_due, new_account,
+                 new_notes, new_tags, new_necessity,
                  rec_id, user_id)
             )
             conn.commit()
