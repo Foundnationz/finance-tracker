@@ -394,6 +394,41 @@ def create_db():
                WHERE recurring_rule_id IS NOT NULL'''
         )
 
+        # Remember processed schedule occurrences independently of
+        # transactions, so deleting a transaction does not regenerate it.
+        cursor.execute(
+            """SELECT 1
+               FROM sqlite_master
+               WHERE type = 'table'
+               AND name = 'processed_schedule_occurrences'"""
+        )
+        occurrence_table_exists = cursor.fetchone() is not None
+
+        cursor.execute(
+            '''CREATE TABLE IF NOT EXISTS processed_schedule_occurrences (
+                user_id INTEGER NOT NULL,
+                recurring_rule_id INTEGER NOT NULL,
+                scheduled_date TEXT NOT NULL,
+                PRIMARY KEY (
+                    user_id,
+                    recurring_rule_id,
+                    scheduled_date
+                )
+            )'''
+        )
+
+        if not occurrence_table_exists:
+            # One-time migration:
+            # existing linked transactions count as processed occurrences.
+            cursor.execute(
+                '''INSERT OR IGNORE INTO processed_schedule_occurrences
+                   (user_id, recurring_rule_id, scheduled_date)
+                   SELECT user_id, recurring_rule_id, date
+                   FROM transactions
+                   WHERE user_id IS NOT NULL
+                     AND recurring_rule_id IS NOT NULL'''
+            )
+
         conn.commit()
 
 # ============================================================
@@ -4164,6 +4199,40 @@ def save_currency(user_id, symbol, name):
         )
         conn.commit()
 
+def advance_schedule_date(
+    current_date,
+    schedule_kind,
+    frequency,
+    monthly_charge_days
+):
+    """Returns the date strictly after the current occurrence."""
+    if schedule_kind == "subscription":
+        return next_subscription_billing_date(
+            monthly_charge_days,
+            current_date,
+            inclusive=False
+        )
+
+    if schedule_kind != "recurring":
+        raise ValueError(
+            f"Unsupported schedule kind: {schedule_kind}"
+        )
+
+    if frequency == "Daily":
+        return current_date + timedelta(days=1)
+
+    if frequency == "Weekly":
+        return current_date + timedelta(weeks=1)
+
+    if frequency == "Monthly":
+        return current_date + relativedelta(months=1)
+
+    if frequency == "Yearly":
+        return current_date + relativedelta(years=1)
+
+    raise ValueError(
+        f"Unsupported recurring frequency: {frequency}"
+    )
 # ============================================================
 # RECURRING TRANSACTIONS
 # ============================================================
@@ -4202,6 +4271,11 @@ def process_recurring_transactions(user_id):
     today_str = today.strftime("%Y-%m-%d")
 
     with get_db() as conn:
+        # Serialize schedule processing before reading due rules.
+        # If another writer is active, SQLite may wait or report
+        # "database is locked" rather than process concurrently.
+        conn.execute("BEGIN IMMEDIATE")
+
         cursor = conn.cursor()
 
         # Get all active recurring transactions that are due
@@ -4287,6 +4361,39 @@ def process_recurring_transactions(user_id):
             # Keep looping until next_due is in the future
             # This catches ALL missed dates not just one
             while next_due <= today:
+                occurrence_date = next_due.strftime("%Y-%m-%d")
+
+                # Calculate the following date before writing this occurrence.
+                following_due = advance_schedule_date(
+                    next_due,
+                    schedule_kind,
+                    frequency,
+                    monthly_charge_days
+                )
+
+                cursor.execute(
+                    '''SELECT 1
+                       FROM processed_schedule_occurrences
+                       WHERE user_id = ?
+                         AND recurring_rule_id = ?
+                         AND scheduled_date = ?''',
+                    (user_id, rec_id, occurrence_date)
+                )
+
+                if cursor.fetchone() is not None:
+                    # Already processed, including occurrences whose
+                    # transaction has since been deleted.
+                    next_due = following_due
+                    continue
+
+                # This marker is committed together with the transaction
+                # and balance update below.
+                cursor.execute(
+                    '''INSERT INTO processed_schedule_occurrences
+                       (user_id, recurring_rule_id, scheduled_date)
+                       VALUES (?, ?, ?)''',
+                    (user_id, rec_id, occurrence_date)
+                )
 
                 # Income transactions should not have a Need/Want rating.
                 transaction_necessity = (
@@ -4390,31 +4497,8 @@ def process_recurring_transactions(user_id):
                         (amount, account_id)
                     )
 
-                # Advance to the next scheduled occurrence.
-                if schedule_kind == "subscription":
-                    next_due = next_subscription_billing_date(
-                        monthly_charge_days,
-                        next_due,
-                        inclusive=False
-                    )
-
-                elif frequency == "Daily":
-                    next_due = next_due + timedelta(days=1)
-
-                elif frequency == "Weekly":
-                    next_due = next_due + timedelta(weeks=1)
-
-                elif frequency == "Monthly":
-                    next_due = next_due + relativedelta(months=1)
-
-                elif frequency == "Yearly":
-                    next_due = next_due + relativedelta(years=1)
-
-                else:
-                    raise ValueError(
-                        f"Unsupported frequency for recurring rule "
-                        f"{rec_id}: {frequency}"
-                    )
+                # Advance after successfully recording this occurrence.
+                next_due = following_due
 
             # After all catch-up done save the new next due date
             cursor.execute(
