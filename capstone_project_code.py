@@ -5663,23 +5663,117 @@ def toggle_recurring(user_id, rec_id, new_status):
 
 def delete_recurring(user_id, rec_id):
     """
-    Permanently deletes a recurring transaction.
-    Does NOT delete past transactions already added.
+    Deletes an ordinary recurring rule, or a subscription and its rule.
+
+    Past transactions and account balances remain unchanged.
     """
-    confirmed = messagebox.askyesno(
-        "Confirm Delete",
-        "Delete this recurring transaction?\n\n"
-        "Past transactions already added will not be affected."
-    )
-    if confirmed:
-        with get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM recurring_transactions WHERE id = ? AND user_id = ?",
-                (rec_id, user_id)
-            )
-            conn.commit()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''SELECT name, schedule_kind
+               FROM recurring_transactions
+               WHERE id = ? AND user_id = ?''',
+            (rec_id, user_id)
+        )
+        rule = cursor.fetchone()
+
+        cursor.execute(
+            '''SELECT id
+               FROM subscriptions
+               WHERE recurring_rule_id = ? AND user_id = ?''',
+            (rec_id, user_id)
+        )
+        subscription = cursor.fetchone()
+
+    if rule is None:
+        messagebox.showinfo(
+            "Not Found",
+            "This recurring schedule no longer exists.",
+            parent=root
+        )
         show_recurring_transactions(user_id)
+        return
+
+    name, schedule_kind = rule
+
+    if schedule_kind == "subscription":
+        if subscription is None:
+            messagebox.showerror(
+                "Invalid Subscription Link",
+                (
+                    "This subscription schedule has no linked subscription "
+                    "record. Nothing was deleted.\n\n"
+                    "Please resolve the broken link before continuing."
+                ),
+                parent=root
+            )
+            return
+
+        confirmation_text = (
+            f"Delete subscription schedule '{name}'?\n\n"
+            "The linked subscription will also be removed from "
+            "the Subscriptions screen.\n\n"
+            "Past transactions and account balances will not change.\n"
+            "Past expenses remain in Transaction History."
+        )
+
+    elif schedule_kind == "recurring":
+        if subscription is not None:
+            messagebox.showerror(
+                "Invalid Schedule Link",
+                (
+                    "This ordinary recurring rule is unexpectedly linked "
+                    "to a subscription. Nothing was deleted."
+                ),
+                parent=root
+            )
+            return
+
+        confirmation_text = (
+            f"Delete recurring schedule '{name}'?\n\n"
+            "Past transactions and account balances will not change."
+        )
+
+    else:
+        messagebox.showerror(
+            "Invalid Schedule",
+            "The schedule type is not recognised. Nothing was deleted.",
+            parent=root
+        )
+        return
+
+    if not messagebox.askyesno(
+        "Confirm Delete",
+        confirmation_text,
+        parent=root
+    ):
+        return
+
+    try:
+        if schedule_kind == "subscription":
+            delete_subscription_and_schedule(
+                user_id,
+                subscription[0]
+            )
+        else:
+            with get_db() as conn:
+                conn.execute(
+                    '''DELETE FROM recurring_transactions
+                       WHERE id = ? AND user_id = ?
+                         AND schedule_kind = 'recurring' ''',
+                    (rec_id, user_id)
+                )
+                conn.commit()
+
+    except (sqlite3.Error, ValueError) as error:
+        messagebox.showerror(
+            "Deletion Failed",
+            str(error),
+            parent=root
+        )
+        return
+
+    show_recurring_transactions(user_id)
 
 # ============================================================
 # EXPORT TRANSACTIONS TO CSV
@@ -6719,23 +6813,116 @@ def show_subscription_list(user_id):
         color="#718096"
     ).pack(side="left", padx=5)
 
+def delete_subscription_and_schedule(user_id, sub_id):
+    """
+    Deletes a subscription and its linked recurring schedule together.
+
+    Preserves:
+    - Past transactions
+    - Account balances
+    - Processed-occurrence markers
+
+    Returns True if the subscription existed, otherwise False.
+    """
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.cursor()
+
+        cursor.execute(
+            '''SELECT recurring_rule_id
+               FROM subscriptions
+               WHERE id = ? AND user_id = ?''',
+            (sub_id, user_id)
+        )
+        row = cursor.fetchone()
+
+        if row is None:
+            return False
+
+        rule_id = row[0]
+
+        # Check the link before deleting either record.
+        if rule_id is not None:
+            cursor.execute(
+                '''SELECT user_id, schedule_kind
+                   FROM recurring_transactions
+                   WHERE id = ?''',
+                (rule_id,)
+            )
+            rule = cursor.fetchone()
+
+            # A missing rule can be cleaned up by removing its
+            # dangling subscription record.
+            # A conflicting existing rule must not be deleted.
+            if rule is not None:
+                owner_id, schedule_kind = rule
+
+                if (
+                    owner_id != user_id
+                    or schedule_kind != "subscription"
+                ):
+                    raise ValueError(
+                        "The subscription has an invalid schedule link. "
+                        "Nothing was deleted."
+                    )
+
+        # Remove the subscription first, then its schedule.
+        cursor.execute(
+            '''DELETE FROM subscriptions
+               WHERE id = ? AND user_id = ?''',
+            (sub_id, user_id)
+        )
+
+        if rule_id is not None:
+            cursor.execute(
+                '''DELETE FROM recurring_transactions
+                   WHERE id = ? AND user_id = ?
+                     AND schedule_kind = 'subscription' ''',
+                (rule_id, user_id)
+            )
+
+        conn.commit()
+        return True
+
 def confirm_delete_subscription(user_id, sub_id, sub_name):
     """
-    Confirmation dialog before deleting a subscription.
+    Deletes a subscription and its linked schedule after confirmation.
+    Does not delete or reverse past transactions.
     """
     confirmed = messagebox.askyesno(
-        "Confirm Delete",
-        f"Delete subscription '{sub_name}'?\n\nThis cannot be undone."
+        "Delete Subscription",
+        (
+            f"Delete subscription '{sub_name}'?\n\n"
+            "Its linked recurring schedule will also be deleted, "
+            "so it will stop generating future expenses.\n\n"
+            "Past transactions and account balances will not change.\n"
+            "Past expenses remain in Transaction History.\n\n"
+            "This cannot be undone."
+        ),
+        parent=root
     )
-    if confirmed:
-        with get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM subscriptions WHERE id = ? AND user_id = ?",
-                (sub_id, user_id)
-            )
-            conn.commit()
-        show_subscription_list(user_id)
+
+    if not confirmed:
+        return
+
+    try:
+        deleted = delete_subscription_and_schedule(user_id, sub_id)
+    except (sqlite3.Error, ValueError) as error:
+        messagebox.showerror(
+            "Deletion Failed",
+            str(error),
+            parent=root
+        )
+        return
+
+    if not deleted:
+        messagebox.showinfo(
+            "Subscription Not Found",
+            "This subscription no longer exists. The list will refresh.",
+            parent=root
+        )
+
+    show_subscription_list(user_id)
 
 def show_subscription_payments(user_id, sub_id, sub_name):
     """
