@@ -391,6 +391,24 @@ def create_db():
                ON transactions (user_id, recurring_rule_id)'''
         )
 
+                # Link generated expenses to their originating subscription.
+        # Older transactions remain NULL because their origin is unverified.
+        cursor.execute("PRAGMA table_info(transactions)")
+        transaction_columns = {
+            column[1] for column in cursor.fetchall()
+        }
+
+        if "subscription_id" not in transaction_columns:
+            cursor.execute(
+                "ALTER TABLE transactions "
+                "ADD COLUMN subscription_id INTEGER"
+            )
+
+        cursor.execute(
+            '''CREATE INDEX IF NOT EXISTS idx_transactions_subscription
+               ON transactions (user_id, subscription_id)'''
+        )
+
         conn.commit()
 
 # ============================================================
