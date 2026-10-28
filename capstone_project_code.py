@@ -4231,6 +4231,28 @@ def process_recurring_transactions(user_id):
             tags      = tags      or ""
             necessity = necessity or "unset"
 
+            # Ordinary recurring rules have no subscription ID.
+            linked_subscription_id = None
+
+            if schedule_kind == "subscription":
+                # Find the subscription associated with this shared rule.
+                cursor.execute(
+                    '''SELECT id
+                       FROM subscriptions
+                       WHERE user_id = ? AND recurring_rule_id = ?''',
+                    (user_id, rec_id)
+                )
+                linked_subscription = cursor.fetchone()
+
+                if linked_subscription is None:
+                    raise ValueError(
+                        f"Subscription rule {rec_id} has no linked "
+                        "subscription record. No expense was generated "
+                        "for this rule."
+                    )
+
+                linked_subscription_id = linked_subscription[0]
+
             next_due = datetime.strptime(
                 next_due_date_str, "%Y-%m-%d"
             ).date()
@@ -4274,13 +4296,26 @@ def process_recurring_transactions(user_id):
                     else "unset"
                 )
 
-                # Record the stable ID of the rule that created this transaction.
+                # Label the generated record according to its schedule kind.
+                source_label = (
+                    "Subscription"
+                    if schedule_kind == "subscription"
+                    else "Recurring"
+                )
+
+                transaction_notes = f"{source_label}: {name}"
+                if notes:
+                    transaction_notes += f" | {notes}"
+
+                # A subscription expense stores both IDs:
+                # - recurring_rule_id for shared recurring history
+                # - subscription_id for subscription payment history
                 cursor.execute(
                     '''INSERT INTO transactions
                        (user_id, category, type, amount,
                         date, time, account_id, notes, necessity,
-                        recurring_rule_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                        recurring_rule_id, subscription_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                     (
                         user_id,
                         category,
@@ -4289,11 +4324,10 @@ def process_recurring_transactions(user_id):
                         next_due.strftime("%Y-%m-%d"),
                         "00:00",
                         account_id,
-                        f"Recurring: {name}" + (
-                            f" | {notes}" if notes else ""
-                        ),
+                        transaction_notes,
                         transaction_necessity,
-                        rec_id
+                        rec_id,
+                        linked_subscription_id
                     )
                 )
 
