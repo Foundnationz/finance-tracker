@@ -5699,16 +5699,178 @@ def show_recurring_history(user_id, rec_id, rec_name):
 
 def toggle_recurring(user_id, rec_id, new_status):
     """
-    Pauses (0) or resumes (1) a recurring transaction.
-    While paused it will not auto-fire on login.
+    Pauses a schedule or resumes it from an explicitly confirmed date.
+
+    Resuming does not automatically catch up dates before the
+    confirmed next-due date.
     """
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE recurring_transactions SET is_active = ? WHERE id = ? AND user_id = ?",
-            (new_status, rec_id, user_id)
+    from tkinter import simpledialog
+
+    if new_status not in (0, 1):
+        messagebox.showerror(
+            "Invalid Status",
+            "Schedule status must be active or paused.",
+            parent=root
         )
-        conn.commit()
+        return
+
+    with get_db() as conn:
+        row = conn.execute(
+            '''SELECT name, schedule_kind, is_active,
+                      next_due_date, monthly_charge_days,
+                      schedule_start_date
+               FROM recurring_transactions
+               WHERE id = ? AND user_id = ?''',
+            (rec_id, user_id)
+        ).fetchone()
+
+    if row is None:
+        messagebox.showerror(
+            "Not Found",
+            "This schedule no longer exists.",
+            parent=root
+        )
+        return
+
+    (
+        name,
+        schedule_kind,
+        old_status,
+        old_next_due,
+        billing_days,
+        start_date_text
+    ) = row
+
+    if old_status == new_status:
+        show_recurring_transactions(user_id)
+        return
+
+    if new_status == 0:
+        confirmed = messagebox.askyesno(
+            "Pause Schedule",
+            (
+                f"Pause '{name}'?\n\n"
+                "No new occurrences will be recorded while paused.\n"
+                "Past transactions and account balances will not change.\n\n"
+                "When resuming, you will confirm a new next-due date."
+            ),
+            parent=root
+        )
+
+        if not confirmed:
+            return
+
+        proposed_due = old_next_due
+
+    else:
+        today = datetime.today().date()
+
+        try:
+            if schedule_kind == "subscription":
+                start_date = datetime.strptime(
+                    start_date_text, "%Y-%m-%d"
+                ).date()
+
+                next_date = next_subscription_billing_date(
+                    billing_days,
+                    max(today, start_date),
+                    inclusive=True
+                )
+
+            elif schedule_kind == "recurring":
+                entered_date = simpledialog.askstring(
+                    "Resume Recurring Schedule",
+                    (
+                        f"Enter the next due date for '{name}'.\n"
+                        "Use YYYY-MM-DD, today or a future date.\n\n"
+                        "Earlier pending dates will not be caught up."
+                    ),
+                    initialvalue=today.isoformat(),
+                    parent=root
+                )
+
+                if entered_date is None:
+                    return
+
+                entered_date = entered_date.strip()
+                next_date = datetime.strptime(
+                    entered_date, "%Y-%m-%d"
+                ).date()
+
+                if (
+                    next_date.isoformat() != entered_date
+                    or next_date < today
+                ):
+                    raise ValueError(
+                        "Choose today or a future date using YYYY-MM-DD."
+                    )
+
+            else:
+                raise ValueError("The schedule type is not recognised.")
+
+        except (TypeError, ValueError, OverflowError) as error:
+            messagebox.showerror(
+                "Cannot Resume",
+                f"Check the schedule dates and billing settings.\n\n{error}",
+                parent=root
+            )
+            return
+
+        proposed_due = next_date.isoformat()
+
+        confirmed = messagebox.askyesno(
+            "Confirm Resume",
+            (
+                f"Resume '{name}'?\n\n"
+                f"Next scheduled date: {proposed_due}\n\n"
+                "Any pending occurrences before that date will be skipped.\n"
+                "No transactions or balance changes are made by resuming.\n\n"
+                "If the next date is today, it becomes eligible for "
+                "processing at the next login."
+            ),
+            parent=root
+        )
+
+        if not confirmed:
+            return
+
+    try:
+        with get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            # Refuse to overwrite schedule state changed since this
+            # confirmation was prepared.
+            current = conn.execute(
+                '''SELECT name, schedule_kind, is_active,
+                          next_due_date, monthly_charge_days,
+                          schedule_start_date
+                   FROM recurring_transactions
+                   WHERE id = ? AND user_id = ?''',
+                (rec_id, user_id)
+            ).fetchone()
+
+            if current != row:
+                raise ValueError(
+                    "The schedule changed while this dialog was open. "
+                    "Please refresh and try again."
+                )
+
+            conn.execute(
+                '''UPDATE recurring_transactions
+                   SET is_active = ?, next_due_date = ?
+                   WHERE id = ? AND user_id = ?''',
+                (new_status, proposed_due, rec_id, user_id)
+            )
+            conn.commit()
+
+    except (sqlite3.Error, ValueError) as error:
+        messagebox.showerror(
+            "Could Not Update Schedule",
+            str(error),
+            parent=root
+        )
+        return
+
     show_recurring_transactions(user_id)
 
 
