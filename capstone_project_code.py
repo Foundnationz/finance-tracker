@@ -4204,20 +4204,21 @@ CURRENCIES = {
 # This is not stored as a normal user-created category.
 ALL_EXPENSE_CATEGORIES = "All Expense Categories"
 
-# Whitelist of tables allowed to be cleared when deleting a user
-# If a table name is not in this set it will not be touched
-ALLOWED_DELETE_TABLES = {
+# Delete user data in this exact order:
+# child records first, then the records they reference.
+USER_DATA_DELETE_ORDER = (
+    "tags",
+    "processed_schedule_occurrences",
     "transactions",
-    "accounts",
+    "subscriptions",
+    "recurring_transactions",
     "budgets",
     "categories",
-    "subscriptions",
     "wishlist",
     "badges",
-    "tags",
-    "recurring_transactions",
-    "settings"
-}
+    "settings",
+    "accounts",
+)
 
 def get_currency(user_id):
     """
@@ -10972,38 +10973,92 @@ def get_all_usernames():
 
 def delete_user_by_username(username):
     """
-    Deletes a user by username.
-    Uses messagebox for confirmation — no input() needed.
-    Safe to call from a button or console.
+    Permanently deletes a user and their data after confirmation.
+
+    Intended for developer use in a running Tkinter application.
+    All database deletions are committed together or rolled back.
     """
+    username = username.strip()
+
+    if not username:
+        print("No username entered.")
+        return False
+
+    # Look up the user without holding a write transaction
+    # while waiting for the confirmation dialog.
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM users WHERE username = ?", (username,))
-        user = cursor.fetchone()
+        user = conn.execute(
+            "SELECT id FROM users WHERE username = ?",
+            (username,)
+        ).fetchone()
 
-        if not user:
-            print(f"User '{username}' not found.")
-            return
+    if user is None:
+        print(f"User '{username}' not found.")
+        return False
 
-        # Use tkinter dialog for confirmation instead of input()
-        confirmed = messagebox.askyesno(
-            "Confirm Delete",
-            f"Permanently delete user '{username}' and all their data?"
+    user_id = user[0]
+
+    confirmed = messagebox.askyesno(
+        "Permanently Delete User",
+        (
+            f"Permanently delete user '{username}' and all their data?\n\n"
+            "This includes accounts, transactions, subscriptions, "
+            "recurring schedules, processed occurrences, budgets, "
+            "categories, wishlist items, badges and settings.\n\n"
+            "This cannot be undone."
         )
-        if confirmed:
-            user_id = user[0]
-            # Delete all related data first (foreign key safety)
-            # Loop through the whitelist we defined at the top of the file
-            # Only table names in ALLOWED_DELETE_TABLES can be used here
-            for table in ALLOWED_DELETE_TABLES:
-                cursor.execute(
-                    f"DELETE FROM {table} WHERE user_id = ?", (user_id,)
+    )
+
+    if not confirmed:
+        print("Deletion cancelled.")
+        return False
+
+    try:
+        with get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.cursor()
+
+            # Confirm the same user still exists after the dialog.
+            cursor.execute(
+                "SELECT id FROM users WHERE id = ? AND username = ?",
+                (user_id, username)
+            )
+
+            if cursor.fetchone() is None:
+                print(
+                    f"User '{username}' no longer exists. Nothing was deleted."
                 )
-            cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+                return False
+
+            for table in USER_DATA_DELETE_ORDER:
+                cursor.execute(
+                    f'DELETE FROM "{table}" WHERE user_id = ?',
+                    (user_id,)
+                )
+
+            cursor.execute(
+                "DELETE FROM users WHERE id = ?",
+                (user_id,)
+            )
+
             conn.commit()
-            print(f"User '{username}' deleted successfully.")
-        else:
-            print("Deletion cancelled.")
+
+    except sqlite3.Error as error:
+        # get_db() closes the connection on exit.
+        # An uncommitted deletion transaction is rolled back.
+        print(f"Could not delete user '{username}': {error}")
+        messagebox.showerror(
+            "User Deletion Failed",
+            (
+                "The deletion was not completed. "
+                "Database changes from this attempt were rolled back.\n\n"
+                f"Details: {error}"
+            )
+        )
+        return False
+
+    print(f"User '{username}' and their data were deleted successfully.")
+    return True
 
 
 # ============================================================
