@@ -7485,6 +7485,454 @@ def update_linked_subscription(
 
 def show_edit_subscription(user_id, sub_id):
     """
+    Edits a subscription through its shared recurring schedule.
+
+    Older, unlinked subscriptions are routed to the legacy editor.
+    """
+    # Read the link before changing the current screen.
+    with get_db() as conn:
+        subscription = conn.execute(
+            '''SELECT recurring_rule_id
+               FROM subscriptions
+               WHERE id = ? AND user_id = ?''',
+            (sub_id, user_id)
+        ).fetchone()
+
+        if subscription is not None and subscription[0] is not None:
+            rule = conn.execute(
+                '''SELECT name, category, amount, monthly_charge_days,
+                          account_id, notes, necessity, next_due_date,
+                          schedule_start_date, is_active, type, schedule_kind
+                   FROM recurring_transactions
+                   WHERE id = ? AND user_id = ?''',
+                (subscription[0], user_id)
+            ).fetchone()
+        else:
+            rule = None
+
+    if subscription is None:
+        messagebox.showerror(
+            "Not Found",
+            "This subscription no longer exists.",
+            parent=root
+        )
+        return
+
+    if subscription[0] is None:
+        show_edit_unlinked_subscription(user_id, sub_id)
+        return
+
+    if rule is None:
+        messagebox.showerror(
+            "Invalid Schedule Link",
+            "The subscription's linked schedule could not be found.",
+            parent=root
+        )
+        return
+
+    (
+        old_name,
+        old_category,
+        old_amount,
+        old_days,
+        old_account_id,
+        old_notes,
+        old_necessity,
+        old_next_due_text,
+        start_date_text,
+        is_active,
+        rule_type,
+        schedule_kind
+    ) = rule
+
+    if rule_type != "expense" or schedule_kind != "subscription":
+        messagebox.showerror(
+            "Invalid Schedule",
+            "The linked rule is not a subscription expense.",
+            parent=root
+        )
+        return
+
+    try:
+        old_next_due = datetime.strptime(
+            old_next_due_text, "%Y-%m-%d"
+        ).date()
+        start_date = datetime.strptime(
+            start_date_text, "%Y-%m-%d"
+        ).date()
+
+        # Validate the existing billing-day settings.
+        next_subscription_billing_date(
+            old_days, old_next_due, inclusive=True
+        )
+        normalised_old_days = ",".join(
+            str(day)
+            for day in sorted({
+                int(part.strip()) for part in old_days.split(",")
+            })
+        )
+    except (TypeError, ValueError):
+        messagebox.showerror(
+            "Invalid Schedule",
+            "The existing schedule contains invalid dates or billing days. "
+            "Nothing was changed.",
+            parent=root
+        )
+        return
+
+    clear_window()
+    sym = get_currency(user_id)
+    saved = False
+
+    header = tk.Frame(root, bg="#2b6cb0", pady=12)
+    header.pack(fill="x")
+
+    tk.Label(
+        header,
+        text="Edit Subscription",
+        font=("Segoe UI", 16, "bold"),
+        bg="#2b6cb0",
+        fg="white"
+    ).pack()
+
+    tk.Label(
+        header,
+        text=f"Editing: {old_name}",
+        font=("Segoe UI", 10),
+        bg="#2b6cb0",
+        fg="#bee3f8"
+    ).pack()
+
+    # Reserve space for navigation before the scrolling content.
+    btn_bar = tk.Frame(root, bg="#f0f4f8", pady=10)
+    btn_bar.pack(side="bottom", fill="x", padx=20)
+
+    body = make_scrollable_frame(root)
+
+    def field_label(text):
+        tk.Label(
+            body,
+            text=text,
+            font=("Segoe UI", 10, "bold"),
+            bg="#f0f4f8"
+        ).pack(anchor="w", padx=20, pady=(10, 2))
+
+    status = "Active" if is_active else "Paused"
+
+    tk.Label(
+        body,
+        text=(
+            f"Status: {status}\n"
+            f"Start date: {start_date_text}\n"
+            f"Current next billing date: {old_next_due_text}"
+        ),
+        font=("Segoe UI", 10),
+        bg="#f0f4f8",
+        fg="#2d3748",
+        justify="left"
+    ).pack(anchor="w", padx=20, pady=10)
+
+    field_label("Subscription Name:")
+    name_entry = make_entry(body, width=35)
+    name_entry.insert(0, old_name)
+    name_entry.pack(anchor="w", padx=20)
+
+    field_label("Expense Category:")
+    cat_row = tk.Frame(body, bg="#f0f4f8")
+    cat_row.pack(anchor="w", padx=20)
+
+    categories = get_expense_categories(user_id)
+
+    # Display the stored value even if the category was deleted.
+    # Saving still requires an existing expense category.
+    category_var = tk.StringVar(value=old_category)
+    category_dd = ttk.Combobox(
+        cat_row,
+        textvariable=category_var,
+        values=categories,
+        state="readonly",
+        width=25
+    )
+    category_dd.pack(side="left")
+
+    make_button(
+        cat_row,
+        "+ Add Category",
+        lambda: open_add_category_popup(
+            user_id, "expense", category_dd, category_var
+        ),
+        color="#3182ce",
+        width=14
+    ).pack(side="left", padx=6)
+
+    field_label(f"Amount Per Occurrence ({sym}):")
+    amount_entry = make_entry(body, width=20)
+    amount_entry.insert(0, str(old_amount))
+    amount_entry.pack(anchor="w", padx=20)
+
+    field_label("Monthly Billing Days (for example 1,15):")
+    days_var = tk.StringVar(value=normalised_old_days)
+    days_entry = tk.Entry(
+        body,
+        textvariable=days_var,
+        width=30,
+        font=("Segoe UI", 10),
+        relief="solid",
+        bd=1
+    )
+    days_entry.pack(anchor="w", padx=20)
+
+    tk.Label(
+        body,
+        text=(
+            "If billing days change, the new pattern begins tomorrow "
+            "or on the original start date, whichever is later.\n"
+            "Days that do not exist in a month are skipped."
+        ),
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8",
+        fg="#718096",
+        wraplength=500,
+        justify="left"
+    ).pack(anchor="w", padx=20, pady=(3, 0))
+
+    preview_label = tk.Label(
+        body,
+        text="",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8",
+        fg="#2b6cb0"
+    )
+    preview_label.pack(anchor="w", padx=20, pady=6)
+
+    field_label("Account:")
+    accounts = view_accounts(user_id)
+    account_options = {
+        f"{acc[1]} (ID {acc[0]}) | {sym}{acc[2]:,.2f}": acc[0]
+        for acc in accounts
+    }
+
+    old_account_label = next(
+        (
+            label for label, account_id in account_options.items()
+            if account_id == old_account_id
+        ),
+        ""
+    )
+
+    account_var = tk.StringVar(value=old_account_label)
+    account_dd = ttk.Combobox(
+        body,
+        textvariable=account_var,
+        values=list(account_options),
+        state="readonly",
+        width=45
+    )
+    account_dd.pack(anchor="w", padx=20)
+
+    field_label("Notes (optional):")
+    notes_entry = make_entry(body, width=40)
+    notes_entry.insert(0, old_notes or "")
+    notes_entry.pack(anchor="w", padx=20)
+
+    field_label("Necessity:")
+    necessity_var = tk.StringVar(
+        value=old_necessity
+        if old_necessity in ("need", "want", "unset")
+        else "unset"
+    )
+    necessity_frame = tk.Frame(body, bg="#f0f4f8")
+    necessity_frame.pack(anchor="w", padx=20)
+
+    for label, value in [
+        ("Need", "need"),
+        ("Want", "want"),
+        ("Not set", "unset")
+    ]:
+        tk.Radiobutton(
+            necessity_frame,
+            text=label,
+            variable=necessity_var,
+            value=value,
+            font=("Segoe UI", 10),
+            bg="#f0f4f8"
+        ).pack(side="left", padx=(0, 10))
+
+    tk.Label(
+        body,
+        text=(
+            "Saving does not generate expenses or change account balances.\n"
+            "Past transactions, the start date, and active/paused status "
+            "are preserved."
+        ),
+        font=("Segoe UI", 9, "italic"),
+        bg="#f0f4f8",
+        fg="#2c5282",
+        wraplength=500,
+        justify="left"
+    ).pack(anchor="w", padx=20, pady=12)
+
+    msg_label = tk.Label(
+        body,
+        text="",
+        font=("Segoe UI", 10),
+        bg="#f0f4f8",
+        fg="red",
+        wraplength=500,
+        justify="left"
+    )
+    msg_label.pack(anchor="w", padx=20, pady=(0, 10))
+
+    def calculate_preview():
+        today = datetime.today().date()
+
+        if old_next_due <= today:
+            raise ValueError(
+                "An occurrence is due today or earlier. "
+                "Resolve outstanding dates before editing."
+            )
+
+        raw_days = days_var.get().strip()
+
+        # Validate before normalising.
+        next_subscription_billing_date(
+            raw_days, today, inclusive=True
+        )
+
+        normalised_days = ",".join(
+            str(day)
+            for day in sorted({
+                int(part.strip()) for part in raw_days.split(",")
+            })
+        )
+
+        if normalised_days == normalised_old_days:
+            next_due = old_next_due
+        else:
+            next_due = next_subscription_billing_date(
+                normalised_days,
+                max(today + timedelta(days=1), start_date),
+                inclusive=True
+            )
+
+        return normalised_days, next_due
+
+    def update_preview(*args):
+        try:
+            _, next_due = calculate_preview()
+        except ValueError as error:
+            preview_label.config(
+                text=str(error),
+                fg="#c53030"
+            )
+        else:
+            preview_label.config(
+                text=f"Next billing date after saving: {next_due.isoformat()}",
+                fg="#2b6cb0"
+            )
+
+    days_var.trace_add("write", update_preview)
+    update_preview()
+
+    def on_save():
+        nonlocal saved
+
+        if saved:
+            return
+
+        try:
+            billing_days, preview_due = calculate_preview()
+        except ValueError as error:
+            msg_label.config(text=str(error), fg="red")
+            return
+
+        confirmed = messagebox.askyesno(
+            "Confirm Subscription Changes",
+            (
+                f"Save changes to '{name_entry.get().strip()}'?\n\n"
+                f"Next billing date: {preview_due.isoformat()}\n"
+                f"Status remains: {status}\n\n"
+                "If billing days changed, the old future billing pattern "
+                "will be replaced by the new pattern.\n"
+                "Past transactions and account balances will not change."
+            ),
+            parent=root
+        )
+
+        if not confirmed:
+            return
+
+        try:
+            saved_next_due = update_linked_subscription(
+                user_id=user_id,
+                sub_id=sub_id,
+                name=name_entry.get(),
+                category=category_var.get(),
+                amount_text=amount_entry.get(),
+                billing_days_text=billing_days,
+                account_id=account_options.get(account_var.get()),
+                notes=notes_entry.get(),
+                necessity=necessity_var.get()
+            )
+        except (sqlite3.Error, ValueError, OverflowError) as error:
+            msg_label.config(
+                text=f"Could not save: {error}",
+                fg="red"
+            )
+            return
+
+        saved = True
+        save_button.config(state="disabled")
+
+        messagebox.showinfo(
+            "Subscription Updated",
+            (
+                "The subscription and shared schedule were updated.\n\n"
+                f"Next billing date: {saved_next_due}\n"
+                "Past transactions and account balances were not changed."
+            ),
+            parent=root
+        )
+        show_subscription_list(user_id)
+
+    save_button = make_button(
+        btn_bar,
+        "Save Changes",
+        on_save,
+        color="#38a169"
+    )
+    save_button.pack(side="left", padx=5)
+
+    make_button(
+        btn_bar,
+        "Back",
+        lambda: show_subscription_list(user_id),
+        color="#718096"
+    ).pack(side="left", padx=5)
+
+    # Outstanding occurrences must be resolved under the old settings.
+    if old_next_due <= datetime.today().date():
+        save_button.config(state="disabled")
+
+        if is_active:
+            explanation = (
+                "Editing is blocked because an occurrence is due today "
+                "or earlier. Log out and log in to process due schedules "
+                "under their existing settings, then reopen this editor. "
+                "Login processes all due schedules for your user."
+            )
+        else:
+            explanation = (
+                "This paused schedule has outstanding dates. "
+                "Editing remains blocked until we implement the explicit "
+                "resume-date policy. Saving will not silently skip dates "
+                "or resume the subscription."
+            )
+
+        msg_label.config(text=explanation, fg="red")
+
+def show_edit_unlinked_subscription(user_id, sub_id):
+    """
     Edit screen for a subscription.
     Allows editing name, category, amount and charge dates.
     """
