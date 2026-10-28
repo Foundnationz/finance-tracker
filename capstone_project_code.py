@@ -4528,11 +4528,14 @@ def show_recurring_transactions(user_id):
             '''SELECT r.id, r.name, r.type, r.category,
                       r.amount, r.frequency, r.next_due_date,
                       r.is_active, a.account_name,
-                      r.notes, r.tags, r.necessity
+                      r.notes, r.tags, r.necessity,
+                      r.schedule_kind, r.monthly_charge_days
                FROM recurring_transactions r
-               JOIN accounts a ON r.account_id = a.id
+               LEFT JOIN accounts a
+                 ON r.account_id = a.id
+                AND a.user_id = r.user_id
                WHERE r.user_id = ?
-               ORDER BY r.next_due_date ASC''',
+               ORDER BY r.next_due_date ASC, r.id ASC''',
             (user_id,)
         )
         items = cursor.fetchall()
@@ -4543,16 +4546,28 @@ def show_recurring_transactions(user_id):
                  font=("Segoe UI", 10),
                  bg="#f0f4f8", fg="#718096").pack(pady=10)
     else:
-        tk.Label(body,
-                 text="✅ These transactions are added automatically when due.",
-                 font=("Segoe UI", 9, "italic"),
-                 bg="#f0f4f8", fg="#718096").pack(pady=(5, 10))
+        tk.Label(
+            body,
+            text=(
+                "Active schedules are checked at login. "
+                "Subscriptions shown here are the same schedules "
+                "shown in the Subscriptions section."
+            ),
+            font=("Segoe UI", 9, "italic"),
+            bg="#f0f4f8",
+            fg="#718096",
+            wraplength=550,
+            justify="left"
+        ).pack(padx=20, pady=(5, 10))
 
         for item in items:
             (rec_id, name, tx_type, category,
              amount, frequency, next_due,
              is_active, account_name,
-             notes, tags, necessity) = item
+             notes, tags, necessity,
+             schedule_kind, monthly_charge_days) = item
+
+            account_name = account_name or "Missing account — needs attention"
 
             # Fallback for rows created before new columns existed
             notes     = notes     or ""
@@ -4577,15 +4592,39 @@ def show_recurring_transactions(user_id):
                      font=("Segoe UI", 9),
                      bg=card_bg, fg="#718096").pack(side="right")
 
-            # Details row
+            # Describe the actual schedule pattern.
+            if schedule_kind == "subscription":
+                kind_label = "Subscription"
+                schedule_label = (
+                    f"Monthly billing days: {monthly_charge_days}"
+                )
+            else:
+                kind_label = (
+                    "Recurring Income"
+                    if tx_type == "income"
+                    else "Recurring Expense"
+                )
+                schedule_label = f"Frequency: {frequency}"
+
             sym = get_currency(user_id)
-            tk.Label(card,
-                     text = f"{frequency}  |  {category}  |  "
-                          f"{prefix}{sym}{amount:,.2f}  |  "
-                          f"Account: {account_name}  |  "
-                          f"Next due: {next_due}",
-                     font=("Segoe UI", 9),
-                     bg=card_bg, fg="#4a5568").pack(anchor="w", padx=10)
+
+            tk.Label(
+                card,
+                text=(
+                    f"{kind_label}\n"
+                    f"{schedule_label}\n"
+                    f"Category: {category}\n"
+                    f"Current amount per occurrence: "
+                    f"{prefix}{sym}{amount:,.2f}\n"
+                    f"Account: {account_name}\n"
+                    f"Next scheduled date: {next_due}"
+                ),
+                font=("Segoe UI", 9),
+                bg=card_bg,
+                fg="#4a5568",
+                wraplength=550,
+                justify="left"
+            ).pack(anchor="w", padx=10)
 
             # Notes row — only show if notes exist
             if notes:
@@ -4624,66 +4663,46 @@ def show_recurring_transactions(user_id):
                             padx=4, pady=1
                         ).pack(side="left", padx=2)
 
-            # ── Action buttons row ────────────────────────────
-            btn_row = tk.Frame(card, bg=card_bg)
-            btn_row.pack(anchor="w", padx=10, pady=(4, 8))
+            # ── Action buttons ────────────────────────────────
+            history_row = tk.Frame(card, bg=card_bg)
+            history_row.pack(anchor="w", padx=10, pady=(6, 2))
 
-            # View History button — shows all auto-generated transactions
             make_button(
-                btn_row, "🔍 View History",
+                history_row,
+                "View History",
                 lambda rid=rec_id, rname=name: show_recurring_history(
                     user_id, rid, rname
                 ),
-                color="#805ad5", width=16
+                color="#805ad5",
+                width=16
             ).pack(side="left", padx=3)
 
-            # Edit button — opens edit screen
+            btn_row = tk.Frame(card, bg=card_bg)
+            btn_row.pack(anchor="w", padx=10, pady=(2, 8))
+
             make_button(
-                btn_row, "✏️ Edit",
+                btn_row,
+                "Edit",
                 lambda rid=rec_id: show_edit_recurring(user_id, rid),
-                color="#3182ce", width=10
+                color="#3182ce",
+                width=10
             ).pack(side="left", padx=3)
 
-            # Pause / Resume toggle button
-            if is_active:
-                make_button(
-                    btn_row, "⏸️ Pause",
-                    lambda rid=rec_id: toggle_recurring(user_id, rid, 0),
-                    color="#dd6b20", width=10
-                ).pack(side="left", padx=3)
-            else:
-                make_button(
-                    btn_row, "▶️ Resume",
-                    lambda rid=rec_id: toggle_recurring(user_id, rid, 1),
-                    color="#38a169", width=10
-                ).pack(side="left", padx=3)
-
-            # Delete button
             make_button(
-                btn_row, "🗑️ Delete",
-                lambda rid=rec_id: delete_recurring(user_id, rid),
-                color="#e53e3e", width=10
+                btn_row,
+                "Pause" if is_active else "Resume",
+                lambda rid=rec_id, target=(0 if is_active else 1):
+                    toggle_recurring(user_id, rid, target),
+                color="#dd6b20" if is_active else "#38a169",
+                width=10
             ).pack(side="left", padx=3)
 
-            # Pause / Resume toggle button
-            if is_active:
-                make_button(
-                    btn_row, "⏸️ Pause",
-                    lambda rid=rec_id: toggle_recurring(user_id, rid, 0),
-                    color="#dd6b20", width=10
-                ).pack(side="left", padx=3)
-            else:
-                make_button(
-                    btn_row, "▶️ Resume",
-                    lambda rid=rec_id: toggle_recurring(user_id, rid, 1),
-                    color="#38a169", width=10
-                ).pack(side="left", padx=3)
-
-            # Delete button
             make_button(
-                btn_row, "🗑️ Delete",
+                btn_row,
+                "Delete",
                 lambda rid=rec_id: delete_recurring(user_id, rid),
-                color="#e53e3e", width=10
+                color="#e53e3e",
+                width=10
             ).pack(side="left", padx=3)
 
     # Bottom buttons
@@ -5419,12 +5438,10 @@ def show_edit_recurring(user_id, rec_id):
 
 def show_recurring_history(user_id, rec_id, rec_name):
     """
-    Shows a popup listing all transactions that were
-    generated by a specific recurring transaction rule.
+    Displays surviving transactions linked to a recurring rule by ID.
 
-    Matches by searching for the auto tag 'auto:{name}'
-    that is saved on every transaction created by
-    process_recurring_transactions.
+    Each transaction is displayed using its own saved income/expense
+    type, rather than the rule's current type.
     """
     sym = get_currency(user_id)
 
@@ -5452,21 +5469,32 @@ def show_recurring_history(user_id, rec_id, rec_name):
         cursor = conn.cursor()
         cursor.execute(
             '''SELECT t.date, t.time, t.amount, t.notes,
-                      t.reference, t.necessity, a.account_name
+                      t.reference, t.necessity,
+                      COALESCE(a.account_name, 'Missing account'),
+                      t.type
                FROM transactions t
-               JOIN accounts a ON t.account_id = a.id
+               LEFT JOIN accounts a
+                 ON t.account_id = a.id
+                AND a.user_id = t.user_id
                WHERE t.user_id = ?
-               AND t.recurring_rule_id = ?
-               ORDER BY t.date DESC, t.time DESC''',
+                 AND t.recurring_rule_id = ?
+               ORDER BY t.date DESC, t.time DESC, t.id DESC''',
             (user_id, rec_id)
         )
         history = cursor.fetchall()
 
-    # Calculate totals
-    total_amount = sum(h[2] for h in history)
-    prefix       = "+" if rec_type == "income" else "-"
-    type_color   = "#276749" if rec_type == "income" else "#e53e3e"
-    status_text  = "🟢 Active" if is_active else "⏸️ Paused"
+    # Use each recorded transaction's type for historical totals.
+    total_income = sum(
+        record[2] for record in history if record[7] == "income"
+    )
+    total_expenses = sum(
+        record[2] for record in history if record[7] == "expense"
+    )
+    net_recorded = total_income - total_expenses
+
+    # These describe the current rule only.
+    prefix = "+" if rec_type == "income" else "-"
+    status_text = "Active" if is_active else "Paused"
 
     # ── Create popup ──────────────────────────────────────────
     popup = tk.Toplevel(root)
@@ -5476,6 +5504,9 @@ def show_recurring_history(user_id, rec_id, rec_name):
     popup.configure(bg="#f0f4f8")
     popup.transient(root)
     popup.grab_set()
+    # Reserve bottom space before packing the expanding history area.
+    btn_bar = tk.Frame(popup, bg="#f0f4f8", pady=10)
+    btn_bar.pack(side="bottom", fill="x", padx=15)
 
     # ── Header ────────────────────────────────────────────────
     header = tk.Frame(popup, bg="#805ad5", pady=10)
@@ -5495,54 +5526,58 @@ def show_recurring_history(user_id, rec_id, rec_name):
         bg="#805ad5", fg="#e9d8fd"
     ).pack()
 
-    # ── Summary strip ─────────────────────────────────────────
+    # ── Summary ───────────────────────────────────────────────
     summary = tk.Frame(popup, bg="white", relief="solid", bd=1)
     summary.pack(fill="x", padx=15, pady=8)
 
-    summary_row = tk.Frame(summary, bg="white")
-    summary_row.pack(pady=8)
+    summary_values = [
+        (
+            "Recorded income",
+            f"{sym}{total_income:,.2f}",
+            "#276749"
+        ),
+        (
+            "Recorded expenses",
+            f"{sym}{total_expenses:,.2f}",
+            "#c53030"
+        ),
+        (
+            "Net recorded",
+            f"{'-' if net_recorded < 0 else '+'}"
+            f"{sym}{abs(net_recorded):,.2f}",
+            "#276749" if net_recorded >= 0 else "#c53030"
+        ),
+        (
+            "Recorded transactions",
+            str(len(history)),
+            "#2b6cb0"
+        ),
+        (
+            "Current amount per occurrence",
+            f"{prefix}{sym}{rec_amount:,.2f}",
+            "#2d3748"
+        )
+    ]
 
-    # Total column
-    total_col = tk.Frame(summary_row, bg="white")
-    total_col.pack(side="left", expand=True)
-    tk.Label(
-        total_col, text="TOTAL RECORDED",
-        font=("Segoe UI", 8), bg="white", fg="#718096"
-    ).pack()
-    tk.Label(
-        total_col, text=f"{prefix}{sym}{total_amount:,.2f}",
-        font=("Segoe UI", 11, "bold"), bg="white", fg=type_color
-    ).pack()
+    for label, value, color in summary_values:
+        row = tk.Frame(summary, bg="white")
+        row.pack(fill="x", padx=10, pady=2)
 
-    tk.Frame(summary_row, bg="#e2e8f0", width=1).pack(
-        side="left", fill="y", padx=10)
+        tk.Label(
+            row,
+            text=f"{label}:",
+            font=("Segoe UI", 9),
+            bg="white",
+            fg="#4a5568"
+        ).pack(side="left")
 
-    # Times fired column
-    count_col = tk.Frame(summary_row, bg="white")
-    count_col.pack(side="left", expand=True)
-    tk.Label(
-        count_col, text="TIMES FIRED",
-        font=("Segoe UI", 8), bg="white", fg="#718096"
-    ).pack()
-    tk.Label(
-        count_col, text=str(len(history)),
-        font=("Segoe UI", 11, "bold"), bg="white", fg="#2b6cb0"
-    ).pack()
-
-    tk.Frame(summary_row, bg="#e2e8f0", width=1).pack(
-        side="left", fill="y", padx=10)
-
-    # Amount per fire column
-    per_col = tk.Frame(summary_row, bg="white")
-    per_col.pack(side="left", expand=True)
-    tk.Label(
-        per_col, text="PER OCCURRENCE",
-        font=("Segoe UI", 8), bg="white", fg="#718096"
-    ).pack()
-    tk.Label(
-        per_col, text=f"{prefix}{sym}{rec_amount:,.2f}",
-        font=("Segoe UI", 11, "bold"), bg="white", fg="#2d3748"
-    ).pack()
+        tk.Label(
+            row,
+            text=value,
+            font=("Segoe UI", 9, "bold"),
+            bg="white",
+            fg=color
+        ).pack(side="right")
 
     # ── Info note ─────────────────────────────────────────────
     tk.Label(
@@ -5609,8 +5644,8 @@ def show_recurring_history(user_id, rec_id, rec_name):
         tk.Label(
             scroll_frame,
             text=(
-                "No transactions generated yet.\n"
-                "This recurring rule has not fired."
+                "No linked transactions are currently available.\n"
+                "Older unlinked or deleted transactions are not shown."
             ),
             font=("Segoe UI", 10),
             bg="#f0f4f8", fg="#718096",
@@ -5619,7 +5654,15 @@ def show_recurring_history(user_id, rec_id, rec_name):
     else:
         for record in history:
             (tx_date, tx_time, tx_amount,
-             tx_notes, tx_reference, tx_necessity, tx_account) = record
+             tx_notes, tx_reference, tx_necessity,
+             tx_account, recorded_type) = record
+
+            tx_prefix = "+" if recorded_type == "income" else "-"
+            tx_color = (
+                "#276749"
+                if recorded_type == "income"
+                else "#e53e3e"
+            )
 
             tx_notes     = tx_notes     or ""
             tx_reference = tx_reference or ""
@@ -5642,13 +5685,20 @@ def show_recurring_history(user_id, rec_id, rec_name):
 
             tk.Label(
                 top,
-                text=f"{prefix}{sym}{tx_amount:,.2f}",
+                text=(
+                    f"{recorded_type.capitalize()} "
+                    f"{tx_prefix}{sym}{tx_amount:,.2f}"
+                ),
                 font=("Segoe UI", 9, "bold"),
-                bg="white", fg=type_color
+                bg="white",
+                fg=tx_color
             ).pack(side="right")
 
             # Necessity badge — only for expense recurring transactions
-            if tx_necessity != "unset":
+            if (
+                recorded_type == "expense"
+                and tx_necessity in ("need", "want")
+            ):
                 nec_bg   = "#e9d8fd" if tx_necessity == "want" else "#c6f6d5"
                 nec_text = "🛍️ Want" if tx_necessity == "want" else "✅ Need"
                 tk.Label(
@@ -5681,8 +5731,6 @@ def show_recurring_history(user_id, rec_id, rec_name):
             tk.Frame(tx_card, bg="white", height=4).pack()
 
     # ── Close button ──────────────────────────────────────────
-    btn_bar = tk.Frame(popup, bg="#f0f4f8", pady=10)
-    btn_bar.pack(fill="x", padx=15)
 
     def close_popup():
         # Remove the popup's global scrolling callback first.
