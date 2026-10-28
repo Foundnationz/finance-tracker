@@ -7235,6 +7235,254 @@ def show_subscription_payments(user_id, sub_id, sub_name):
         close_popup, color="#718096", width=12
     ).pack()
 
+def update_linked_subscription(
+    user_id,
+    sub_id,
+    name,
+    category,
+    amount_text,
+    billing_days_text,
+    account_id,
+    notes,
+    necessity
+):
+    """
+    Updates a linked subscription and its shared schedule atomically.
+
+    Does not generate transactions or change account balances.
+    Preserves start date, active/paused status, tags and past records.
+
+    Returns the saved next-due date as YYYY-MM-DD.
+    Raises ValueError for invalid input or an unsafe edit.
+    """
+    import math
+
+    name = name.strip()
+    category = category.strip()
+    notes = notes.strip()
+
+    if not name:
+        raise ValueError("Please enter a subscription name.")
+
+    if not category:
+        raise ValueError("Please select an expense category.")
+
+    if account_id is None:
+        raise ValueError("Please select an account.")
+
+    if necessity not in ("need", "want", "unset"):
+        raise ValueError("Please select a valid necessity rating.")
+
+    try:
+        amount = float(amount_text)
+        if not math.isfinite(amount) or amount <= 0:
+            raise ValueError
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(
+            "Amount must be a finite number greater than zero."
+        ) from None
+
+    today = datetime.today().date()
+
+    # Validate billing days using the same rules as the processor.
+    next_subscription_billing_date(
+        billing_days_text,
+        today,
+        inclusive=True
+    )
+
+    billing_days = ",".join(
+        str(day)
+        for day in sorted({
+            int(part.strip())
+            for part in billing_days_text.split(",")
+        })
+    )
+
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.cursor()
+
+        cursor.execute(
+            '''SELECT recurring_rule_id
+               FROM subscriptions
+               WHERE id = ? AND user_id = ?''',
+            (sub_id, user_id)
+        )
+        subscription = cursor.fetchone()
+
+        if subscription is None:
+            raise ValueError("The subscription no longer exists.")
+
+        rule_id = subscription[0]
+
+        if rule_id is None:
+            raise ValueError(
+                "This older subscription has no shared schedule yet. "
+                "Complete schedule setup before using this editor."
+            )
+
+        cursor.execute(
+            '''SELECT type, schedule_kind, next_due_date,
+                      monthly_charge_days, schedule_start_date
+               FROM recurring_transactions
+               WHERE id = ? AND user_id = ?''',
+            (rule_id, user_id)
+        )
+        rule = cursor.fetchone()
+
+        if rule is None:
+            raise ValueError(
+                "The linked schedule no longer exists."
+            )
+
+        (
+            rule_type,
+            schedule_kind,
+            old_next_due_text,
+            old_billing_days_text,
+            start_date_text
+        ) = rule
+
+        if rule_type != "expense" or schedule_kind != "subscription":
+            raise ValueError(
+                "The linked schedule is not a valid subscription expense."
+            )
+
+        try:
+            old_next_due = datetime.strptime(
+                old_next_due_text, "%Y-%m-%d"
+            ).date()
+
+            start_date = datetime.strptime(
+                start_date_text, "%Y-%m-%d"
+            ).date()
+
+            # Validate and normalise the existing billing days too.
+            next_subscription_billing_date(
+                old_billing_days_text,
+                old_next_due,
+                inclusive=True
+            )
+
+            old_billing_days = ",".join(
+                str(day)
+                for day in sorted({
+                    int(part.strip())
+                    for part in old_billing_days_text.split(",")
+                })
+            )
+        except (TypeError, ValueError):
+            raise ValueError(
+                "The existing schedule has invalid dates or billing days. "
+                "Nothing was changed."
+            ) from None
+
+        if old_next_due <= today:
+            raise ValueError(
+                "This schedule has an occurrence due today or earlier. "
+                "For an active schedule, process outstanding occurrences "
+                "under the old settings before editing. "
+                "For a paused schedule, its outstanding-date policy must "
+                "be resolved before editing. Nothing was changed."
+            )
+
+        # Keep the next date when billing days are unchanged.
+        # Otherwise, the new billing pattern begins tomorrow or on the
+        # original start date, whichever is later.
+        if billing_days == old_billing_days:
+            next_due = old_next_due
+        else:
+            next_due = next_subscription_billing_date(
+                billing_days,
+                max(today + timedelta(days=1), start_date),
+                inclusive=True
+            )
+
+        cursor.execute(
+            '''SELECT 1 FROM accounts
+               WHERE id = ? AND user_id = ?''',
+            (account_id, user_id)
+        )
+        if cursor.fetchone() is None:
+            raise ValueError(
+                "The selected account no longer exists."
+            )
+
+        cursor.execute(
+            '''SELECT 1 FROM categories
+               WHERE user_id = ? AND type = 'expense' AND name = ?''',
+            (user_id, category)
+        )
+        if cursor.fetchone() is None:
+            raise ValueError(
+                "Please select an existing expense category."
+            )
+
+        cursor.execute(
+            '''SELECT 1 FROM subscriptions
+               WHERE user_id = ?
+                 AND id != ?
+                 AND subscription_name = ? COLLATE NOCASE''',
+            (user_id, sub_id, name)
+        )
+        if cursor.fetchone() is not None:
+            raise ValueError(
+                "Another subscription already has this name."
+            )
+
+        cursor.execute(
+            '''UPDATE recurring_transactions
+               SET name = ?,
+                   category = ?,
+                   amount = ?,
+                   monthly_charge_days = ?,
+                   next_due_date = ?,
+                   account_id = ?,
+                   notes = ?,
+                   necessity = ?
+               WHERE id = ? AND user_id = ?''',
+            (
+                name,
+                category,
+                amount,
+                billing_days,
+                next_due.isoformat(),
+                account_id,
+                notes,
+                necessity,
+                rule_id,
+                user_id
+            )
+        )
+
+        # Keep the legacy display fields synchronised until all list
+        # screens read the authoritative schedule directly.
+        cursor.execute(
+            '''UPDATE subscriptions
+               SET subscription_name = ?,
+                   category = ?,
+                   amount = ?,
+                   charge_dates = ?,
+                   notes = ?,
+                   necessity = ?
+               WHERE id = ? AND user_id = ?''',
+            (
+                name,
+                category,
+                amount,
+                billing_days,
+                notes,
+                necessity,
+                sub_id,
+                user_id
+            )
+        )
+
+        conn.commit()
+
+    return next_due.isoformat()
+
 def show_edit_subscription(user_id, sub_id):
     """
     Edit screen for a subscription.
