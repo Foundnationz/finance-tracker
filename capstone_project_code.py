@@ -373,6 +373,24 @@ def create_db():
                 "ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
             )
 
+        # Store the originating recurring rule's ID on transactions.
+        # Older transactions remain NULL because their origin is unverified.
+        cursor.execute("PRAGMA table_info(transactions)")
+        transaction_columns = {
+            column[1] for column in cursor.fetchall()
+        }
+
+        if "recurring_rule_id" not in transaction_columns:
+            cursor.execute(
+                "ALTER TABLE transactions "
+                "ADD COLUMN recurring_rule_id INTEGER"
+            )
+
+        cursor.execute(
+            '''CREATE INDEX IF NOT EXISTS idx_transactions_recurring_rule
+               ON transactions (user_id, recurring_rule_id)'''
+        )
+
         conn.commit()
 
 # ============================================================
@@ -4214,18 +4232,35 @@ def process_recurring_transactions(user_id):
             # This catches ALL missed dates not just one
             while next_due <= today:
 
-                # Insert this missed transaction with notes and necessity
+                # Income transactions should not have a Need/Want rating.
+                transaction_necessity = (
+                    necessity
+                    if tx_type == "expense"
+                    and necessity in ("need", "want", "unset")
+                    else "unset"
+                )
+
+                # Record the stable ID of the rule that created this transaction.
                 cursor.execute(
                     '''INSERT INTO transactions
                        (user_id, category, type, amount,
-                        date, time, account_id, notes, necessity)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                    (user_id, category, tx_type, amount,
-                     next_due.strftime("%Y-%m-%d"),
-                     "00:00",
-                     account_id,
-                     f"Recurring: {name}" + (f" | {notes}" if notes else ""),
-                     necessity)
+                        date, time, account_id, notes, necessity,
+                        recurring_rule_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (
+                        user_id,
+                        category,
+                        tx_type,
+                        amount,
+                        next_due.strftime("%Y-%m-%d"),
+                        "00:00",
+                        account_id,
+                        f"Recurring: {name}" + (
+                            f" | {notes}" if notes else ""
+                        ),
+                        transaction_necessity,
+                        rec_id
+                    )
                 )
 
                 # Get the id of the transaction just inserted
@@ -4250,24 +4285,29 @@ def process_recurring_transactions(user_id):
                             (new_tx_id, user_id, tag)
                         )
 
-                # Always add an auto tag so recurring transactions
-                # are identifiable in transaction history
+                # Keep a readable automatic tag for keyword searches.
+                # History will use recurring_rule_id, not this tag.
+                auto_tag = f"auto:{name}"
+
                 cursor.execute(
                     '''INSERT INTO tags
                        (transaction_id, user_id, tag_name)
-                       VALUES (?, ?, ?)''',
-                    (new_tx_id, user_id, f"auto:{name}")
-                )
-
-                new_tx_id = cursor.lastrowid
-
-                # Save an automatic tag so this transaction is
-                # identifiable in history as a recurring one
-                cursor.execute(
-                    '''INSERT INTO tags
-                       (transaction_id, user_id, tag_name)
-                       VALUES (?, ?, ?)''',
-                    (new_tx_id, user_id, f"auto:{name}")
+                       SELECT ?, ?, ?
+                       WHERE NOT EXISTS (
+                           SELECT 1
+                           FROM tags
+                           WHERE transaction_id = ?
+                             AND user_id = ?
+                             AND tag_name = ?
+                       )''',
+                    (
+                        new_tx_id,
+                        user_id,
+                        auto_tag,
+                        new_tx_id,
+                        user_id,
+                        auto_tag
+                    )
                 )
 
                 # Update account balance
