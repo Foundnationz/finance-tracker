@@ -5697,7 +5697,7 @@ def show_recurring_history(user_id, rec_id, rec_name):
         close_popup, color="#718096", width=12
     ).pack()
 
-def toggle_recurring(user_id, rec_id, new_status):
+def toggle_recurring(user_id, rec_id, new_status, on_complete=None):
     """
     Pauses a schedule or resumes it from an explicitly confirmed date.
 
@@ -5705,6 +5705,12 @@ def toggle_recurring(user_id, rec_id, new_status):
     confirmed next-due date.
     """
     from tkinter import simpledialog
+
+    def refresh_screen():
+        if on_complete is not None:
+            on_complete()
+        else:
+            show_recurring_transactions(user_id)
 
     if new_status not in (0, 1):
         messagebox.showerror(
@@ -5742,7 +5748,7 @@ def toggle_recurring(user_id, rec_id, new_status):
     ) = row
 
     if old_status == new_status:
-        show_recurring_transactions(user_id)
+        refresh_screen()
         return
 
     if new_status == 0:
@@ -5871,7 +5877,7 @@ def toggle_recurring(user_id, rec_id, new_status):
         )
         return
 
-    show_recurring_transactions(user_id)
+    refresh_screen()
 
 
 def delete_recurring(user_id, rec_id):
@@ -6880,150 +6886,337 @@ def show_add_subscription(user_id):
 def show_subscription_list(user_id):
     clear_window()
 
-    # ── Header ──────────────────────────────────────────────
     header = tk.Frame(root, bg="#2b6cb0", pady=12)
     header.pack(fill="x")
+
     tk.Label(
         header,
         text="📋 Subscription List",
         font=("Segoe UI", 16, "bold"),
-        fg="white", bg="#2b6cb0"
+        fg="white",
+        bg="#2b6cb0"
     ).pack()
 
-    # ── Scrollable body ──────────────────────────────────────
+    # Reserve navigation space before adding the scrolling content.
+    btn_bar = tk.Frame(root, bg="#f0f4f8", pady=10)
+    btn_bar.pack(side="bottom", fill="x", padx=20)
+
     body = make_scrollable_frame(root)
-    sym  = get_currency(user_id)
+    sym = get_currency(user_id)
 
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            '''SELECT id, subscription_name, category, amount,
-                      charge_dates, notes, necessity
-               FROM subscriptions WHERE user_id = ?''',
+            '''SELECT
+                   s.id,
+                   s.subscription_name,
+                   s.category,
+                   s.amount,
+                   s.charge_dates,
+                   s.notes,
+                   s.necessity,
+                   s.recurring_rule_id,
+                   r.id,
+                   r.name,
+                   r.category,
+                   r.amount,
+                   r.monthly_charge_days,
+                   r.notes,
+                   r.necessity,
+                   r.next_due_date,
+                   r.schedule_start_date,
+                   r.is_active,
+                   r.type,
+                   r.schedule_kind,
+                   a.id,
+                   a.account_name
+               FROM subscriptions s
+               LEFT JOIN recurring_transactions r
+                 ON r.id = s.recurring_rule_id
+                AND r.user_id = s.user_id
+               LEFT JOIN accounts a
+                 ON a.id = r.account_id
+                AND a.user_id = s.user_id
+               WHERE s.user_id = ?
+               ORDER BY s.subscription_name COLLATE NOCASE, s.id''',
             (user_id,)
         )
         subscriptions = cursor.fetchall()
 
     if not subscriptions:
-        empty_frame = tk.Frame(body, bg="#f0f4f8")
-        empty_frame.pack(pady=40)
         tk.Label(
-            empty_frame, text="🔄",
-            font=("Segoe UI", 36), bg="#f0f4f8"
-        ).pack()
-        tk.Label(
-            empty_frame, text="No subscriptions yet.",
+            body,
+            text="No subscriptions yet.",
             font=("Segoe UI", 13, "bold"),
-            bg="#f0f4f8", fg="#2d3748"
-        ).pack(pady=(5, 2))
+            bg="#f0f4f8",
+            fg="#2d3748"
+        ).pack(pady=(35, 5))
+
         tk.Label(
-            empty_frame,
-            text="Add a subscription to auto-track recurring charges.",
+            body,
+            text="Add a subscription to schedule expense recording at login.",
             font=("Segoe UI", 10),
-            bg="#f0f4f8", fg="#718096"
-        ).pack()
+            bg="#f0f4f8",
+            fg="#718096",
+            wraplength=500
+        ).pack(padx=20)
 
-    # ── Subscription cards ────────────────────────────────────
     for sub in subscriptions:
-        (sub_id, sub_name, category, amount,
-         charge_dates, notes, necessity) = sub
+        (
+            sub_id,
+            legacy_name,
+            legacy_category,
+            legacy_amount,
+            legacy_days,
+            legacy_notes,
+            legacy_necessity,
+            linked_rule_id,
+            found_rule_id,
+            rule_name,
+            rule_category,
+            rule_amount,
+            rule_days,
+            rule_notes,
+            rule_necessity,
+            next_due,
+            start_date,
+            is_active,
+            rule_type,
+            schedule_kind,
+            found_account_id,
+            account_name
+        ) = sub
 
-        # Fallback for rows created before new columns existed
-        notes     = notes     or ""
-        necessity = necessity or "unset"
+        is_unlinked = linked_rule_id is None
+
+        # A link must point to this user's subscription expense rule
+        # and a valid account before scheduling controls are offered.
+        valid_link = (
+            not is_unlinked
+            and found_rule_id is not None
+            and rule_type == "expense"
+            and schedule_kind == "subscription"
+            and found_account_id is not None
+        )
+
+        if valid_link:
+            # The recurring rule is the authoritative source.
+            name = rule_name
+            category = rule_category
+            amount = rule_amount
+            billing_days = rule_days
+            notes = rule_notes or ""
+            necessity = rule_necessity or "unset"
+
+            status_text = "Active" if is_active else "Paused"
+            status_color = "#276749" if is_active else "#975a16"
+
+        else:
+            # Preserve visibility of older or broken records.
+            name = legacy_name
+            category = legacy_category
+            amount = legacy_amount
+            billing_days = legacy_days
+            notes = legacy_notes or ""
+            necessity = legacy_necessity or "unset"
+
+            if is_unlinked:
+                status_text = "Schedule setup required"
+                status_color = "#975a16"
+            else:
+                status_text = "Schedule link needs attention"
+                status_color = "#c53030"
 
         card = tk.Frame(body, bg="white", relief="solid", bd=1)
-        card.pack(fill="x", padx=20, pady=6)
+        card.pack(fill="x", padx=20, pady=8)
 
         tk.Label(
             card,
-            text=f"🔄 {sub_name}",
-            font=("Segoe UI", 11, "bold"), bg="white"
-        ).pack(anchor="w", padx=10, pady=(8, 2))
+            text=f"🔄 {name}",
+            font=("Segoe UI", 12, "bold"),
+            bg="white",
+            fg="#2d3748",
+            wraplength=550,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(10, 2))
 
-        # Main details row
+        tk.Label(
+            card,
+            text=status_text,
+            font=("Segoe UI", 10, "bold"),
+            bg="white",
+            fg=status_color
+        ).pack(anchor="w", padx=12, pady=(0, 6))
+
         tk.Label(
             card,
             text=(
-                f"Category: {category}  |  "
-                f"Amount: {sym}{amount:,.2f}  |  "
-                f"Charge Days: {charge_dates}"
+                f"Category: {category}\n"
+                f"Current amount per occurrence: {sym}{amount:,.2f}\n"
+                f"Monthly billing days: {billing_days}"
             ),
-            font=("Segoe UI", 10), bg="white", fg="#4a5568"
-        ).pack(anchor="w", padx=10, pady=(0, 2))
+            font=("Segoe UI", 10),
+            bg="white",
+            fg="#4a5568",
+            justify="left",
+            wraplength=550
+        ).pack(anchor="w", padx=12)
 
-        # Notes row — only show if notes exist
+        if valid_link:
+            tk.Label(
+                card,
+                text=(
+                    f"Account: {account_name}\n"
+                    f"Start recording from: {start_date}\n"
+                    f"Next scheduled date: {next_due}"
+                ),
+                font=("Segoe UI", 10),
+                bg="white",
+                fg="#4a5568",
+                justify="left",
+                wraplength=550
+            ).pack(anchor="w", padx=12, pady=(4, 0))
+
+            if is_active:
+                explanation = (
+                    "Due occurrences are checked at login. "
+                    "This app records expenses; it does not pay the provider."
+                )
+            else:
+                explanation = (
+                    "No new occurrences are recorded while this schedule "
+                    "is paused. Resume requires confirmation of the next date."
+                )
+
+        elif is_unlinked:
+            explanation = (
+                "This older subscription is not connected to the shared "
+                "scheduler. No automatic expenses are generated by that "
+                "scheduler for this record. Schedule setup will be added next."
+            )
+
+        else:
+            explanation = (
+                "The linked rule is missing, has an unexpected type, "
+                "or has no valid account. Scheduling controls are unavailable. "
+                "Do not add a replacement without first checking the existing "
+                "rule, because it may still be active."
+            )
+
+        tk.Label(
+            card,
+            text=explanation,
+            font=("Segoe UI", 9, "italic"),
+            bg="white",
+            fg="#718096",
+            wraplength=550,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(6, 4))
+
         if notes:
             tk.Label(
                 card,
-                text=f"📝  {notes}",
-                font=("Segoe UI", 8, "italic"),
-                bg="white", fg="#4a5568",
-                wraplength=500, justify="left"
-            ).pack(anchor="w", padx=10, pady=(0, 2))
+                text=f"📝 {notes}",
+                font=("Segoe UI", 9, "italic"),
+                bg="white",
+                fg="#4a5568",
+                wraplength=550,
+                justify="left"
+            ).pack(anchor="w", padx=12, pady=(0, 4))
 
-        # Necessity badge — only show if set
-        if necessity != "unset":
-            nec_bg   = "#e9d8fd" if necessity == "want" else "#c6f6d5"
-            nec_text = "🛍️ Want" if necessity == "want" else "✅ Need"
+        if necessity in ("need", "want"):
             tk.Label(
                 card,
-                text=nec_text,
+                text="Need" if necessity == "need" else "Want",
                 font=("Segoe UI", 8, "bold"),
-                bg=nec_bg, fg="#2d3748",
-                relief="solid", bd=1,
-                padx=4, pady=1
-            ).pack(anchor="w", padx=10, pady=(0, 4))
+                bg="#c6f6d5" if necessity == "need" else "#e9d8fd",
+                fg="#2d3748",
+                padx=5,
+                pady=2
+            ).pack(anchor="w", padx=12, pady=(0, 6))
 
-        # ── Per-card action buttons ────────────────────────────
+        # Put history on its own row to avoid overcrowding.
+        history_row = tk.Frame(card, bg="white")
+        history_row.pack(anchor="w", padx=8, pady=(2, 2))
+
+        make_button(
+            history_row,
+            "View Payments",
+            lambda sid=sub_id, sname=name: show_subscription_payments(
+                user_id, sid, sname
+            ),
+            color="#805ad5",
+            width=16
+        ).pack(side="left", padx=3)
+
         action_row = tk.Frame(card, bg="white")
-        action_row.pack(anchor="e", padx=10, pady=(0, 8))
+        action_row.pack(anchor="w", padx=8, pady=(2, 10))
 
-        # View Payments button — shows past charges for this subscription
+        if valid_link:
+            make_button(
+                action_row,
+                "Edit",
+                lambda sid=sub_id: show_edit_subscription(user_id, sid),
+                color="#3182ce",
+                width=10
+            ).pack(side="left", padx=3)
+
+            make_button(
+                action_row,
+                "Pause" if is_active else "Resume",
+                lambda rid=linked_rule_id, target=(0 if is_active else 1):
+                    toggle_recurring(
+                        user_id,
+                        rid,
+                        target,
+                        on_complete=lambda: show_subscription_list(user_id)
+                    ),
+                color="#dd6b20" if is_active else "#38a169",
+                width=10
+            ).pack(side="left", padx=3)
+
+        elif is_unlinked:
+            make_button(
+                action_row,
+                "Edit Details",
+                lambda sid=sub_id: show_edit_subscription(user_id, sid),
+                color="#3182ce",
+                width=12
+            ).pack(side="left", padx=3)
+
         make_button(
-            action_row, "🔍 View Payments",
-            lambda sid=sub_id, sname=sub_name: show_subscription_payments(
+            action_row,
+            "Delete",
+            lambda sid=sub_id, sname=name: confirm_delete_subscription(
                 user_id, sid, sname
             ),
-            color="#805ad5", width=16
+            color="#e53e3e",
+            width=10
         ).pack(side="left", padx=3)
-
-        make_button(
-            action_row, "✏️ Edit",
-            lambda sid=sub_id: show_edit_subscription(user_id, sid),
-            color="#3182ce", width=10
-        ).pack(side="left", padx=3)
-
-        make_button(
-            action_row, "🗑️ Delete",
-            lambda sid=sub_id, sname=sub_name: confirm_delete_subscription(
-                user_id, sid, sname
-            ),
-            color="#e53e3e", width=10
-        ).pack(side="left", padx=3)
-
-    # ── Bottom buttons ────────────────────────────────────────
-    btn_frame = tk.Frame(body, bg="#f0f4f8")
-    btn_frame.pack(pady=15)
 
     if len(subscriptions) < 5:
         make_button(
-            btn_frame, "➕ Add Subscription",
+            btn_bar,
+            "Add Subscription",
             lambda: show_add_subscription(user_id),
-            color="#38a169"
+            color="#38a169",
+            width=18
         ).pack(side="left", padx=5)
     else:
         tk.Label(
             body,
-            text="⚠️ Maximum 5 subscriptions reached.",
+            text="Maximum 5 subscriptions reached.",
             font=("Segoe UI", 9),
-            bg="#f0f4f8", fg="#e53e3e"
-        ).pack()
+            bg="#f0f4f8",
+            fg="#c53030"
+        ).pack(anchor="w", padx=20, pady=8)
 
     make_button(
-        btn_frame, "← Back to Menu",
+        btn_bar,
+        "Back to Menu",
         lambda: show_main_menu(current_user),
-        color="#718096"
+        color="#718096",
+        width=18
     ).pack(side="left", padx=5)
 
 def delete_subscription_and_schedule(user_id, sub_id):
