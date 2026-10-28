@@ -359,6 +359,41 @@ def create_db():
                ON transactions (user_id, subscription_id)'''
         )
 
+        # Prepare recurring rules to represent subscriptions too.
+        # This does not create, activate or process any schedules.
+        shared_schedule_columns = {
+            "recurring_transactions": {
+                "schedule_kind": "TEXT NOT NULL DEFAULT 'recurring'",
+                "monthly_charge_days": "TEXT",
+                "schedule_start_date": "TEXT",
+            },
+            "subscriptions": {
+                "recurring_rule_id": "INTEGER",
+            },
+        }
+
+        for table_name, column_definitions in shared_schedule_columns.items():
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            existing_columns = {
+                column[1] for column in cursor.fetchall()
+            }
+
+            for column_name, definition in column_definitions.items():
+                if column_name not in existing_columns:
+                    cursor.execute(
+                        f'ALTER TABLE "{table_name}" '
+                        f'ADD COLUMN "{column_name}" {definition}'
+                    )
+
+        # A recurring rule can be linked to at most one subscription.
+        # Existing subscriptions remain unlinked (NULL) for now.
+        cursor.execute(
+            '''CREATE UNIQUE INDEX IF NOT EXISTS
+                   idx_subscriptions_recurring_rule_unique
+               ON subscriptions (recurring_rule_id)
+               WHERE recurring_rule_id IS NOT NULL'''
+        )
+
         conn.commit()
 
 # ============================================================
