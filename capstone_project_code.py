@@ -4150,7 +4150,7 @@ def show_transaction_history(user_id):
                 color="#718096").pack(side="left", padx=5)
 
 
-    # ============================================================
+# ============================================================
 # SUBSCRIPTIONS SCREEN
 # ============================================================
 # Subscriptions = recurring charges (Netflix, Spotify etc.)
