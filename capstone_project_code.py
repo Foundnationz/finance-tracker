@@ -6897,6 +6897,75 @@ def show_edit_subscription(user_id, sub_id):
         color="#718096"
     ).pack(side="left", padx=5)
 
+def next_subscription_billing_date(charge_days, from_date, inclusive=True):
+    """
+    Returns the next valid subscription billing date.
+
+    charge_days:
+        Comma-separated day numbers, for example "1,15".
+
+    from_date:
+        A datetime.date value from which to search.
+
+    inclusive=True:
+        Allows from_date itself if it is a billing date.
+
+    inclusive=False:
+        Returns a billing date strictly after from_date.
+
+    Policy:
+        Days that do not exist in a month are skipped.
+        Duplicate billing days are counted only once.
+    """
+    try:
+        parts = charge_days.split(",")
+
+        # Reject empty entries such as "1,,15" or "15,".
+        if not parts or any(not part.strip() for part in parts):
+            raise ValueError
+
+        days = sorted({
+            int(part.strip()) for part in parts
+        })
+
+        if not days or any(day < 1 or day > 31 for day in days):
+            raise ValueError
+
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError(
+            "Billing days must be numbers from 1 to 31 "
+            "separated by commas, for example 1,15."
+        ) from None
+
+    # Begin with the month containing from_date.
+    month_start = from_date.replace(day=1)
+
+    while True:
+        last_day = monthrange(
+            month_start.year,
+            month_start.month
+        )[1]
+
+        for day in days:
+            # Skip days that do not exist in this month.
+            if day > last_day:
+                continue
+
+            candidate = month_start.replace(day=day)
+
+            if candidate > from_date:
+                return candidate
+
+            if inclusive and candidate == from_date:
+                return candidate
+
+        # No suitable date remains this month: try the next month.
+        if month_start.year == 9999 and month_start.month == 12:
+            raise ValueError(
+                "No later billing date is available within the supported dates."
+            )
+
+        month_start = month_start + relativedelta(months=1)
 
 def validate_subscription_date(charge_dates):
     """
