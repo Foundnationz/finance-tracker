@@ -513,26 +513,92 @@ def register_user(username, email, password):
         return False, "❌ Username or email already exists."
 
 def login_user(username, password):
-    # Step 1: Find user by username only (NOT password)
-    # Step 2: Use verify_password() to check the password safely
+    """
+    Authenticates the user.
+
+    A scheduled-processing failure is reported separately and
+    does not turn valid credentials into a failed login.
+    """
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+        cursor.execute(
+            "SELECT * FROM users WHERE username = ?",
+            (username,)
+        )
         user = cursor.fetchone()
 
-    if user and verify_password(password, user[3]):
-        update_streak(user[0])
-        check_and_award_badges(user[0])
-        # Auto-process any recurring transactions that are due
-        process_recurring_transactions(user[0])
-        # Schedule budget alert after main menu loads
-        # root.after() delays the popup slightly so main menu
-        # appears first before the popup shows on top
-        root.after(800, lambda: show_budget_alert_popup(
-            user[0], check_budget_alerts(user[0])
-        ))
-        return user
-    return None
+    if user is None:
+        return None
+
+    if not verify_password(password, user[3]):
+        return None
+
+    user_id = user[0]
+
+    update_streak(user_id)
+
+    processing_error = None
+
+    try:
+        process_recurring_transactions(user_id)
+    except (sqlite3.Error, ValueError, OverflowError) as error:
+        processing_error = str(error)
+
+        # Keep diagnostic details in the VSCode terminal.
+        import traceback
+        traceback.print_exc()
+
+    # Check achievements after processing, so newly generated
+    # transactions can count toward transaction milestones.
+    check_and_award_badges(user_id)
+
+    def show_login_notices():
+        # Do not show a delayed notice for a user who has already
+        # logged out or switched accounts.
+        if current_user is None or current_user[0] != user_id:
+            return
+
+        if processing_error is not None:
+            messagebox.showwarning(
+                "Signed In — Schedule Processing Failed",
+                (
+                    "You have signed in successfully, but scheduled "
+                    "transaction processing did not complete.\n\n"
+                    "Changes made by that processing attempt were "
+                    "rolled back. Due occurrences may still be pending, "
+                    "so balances and budget totals may not include them.\n\n"
+                    "Do not manually add replacement expenses until "
+                    "you have checked the problem, to avoid duplicates.\n\n"
+                    f"Details: {processing_error}"
+                ),
+                parent=root
+            )
+
+            # Avoid immediately presenting budget alerts based on
+            # potentially incomplete scheduled-expense totals.
+            return
+
+        try:
+            alerts = check_budget_alerts(user_id)
+            show_budget_alert_popup(user_id, alerts)
+        except (sqlite3.Error, ValueError, OverflowError):
+            import traceback
+            traceback.print_exc()
+
+            messagebox.showwarning(
+                "Budget Alerts Unavailable",
+                (
+                    "You are signed in, but budget alerts could not "
+                    "be checked. Review the VSCode terminal for details."
+                ),
+                parent=root
+            )
+
+    # The successful login handler opens the main menu before
+    # this delayed callback displays its notices.
+    root.after(800, show_login_notices)
+
+    return user
 
 # ============================================================
 # STREAK LOGIC
@@ -939,8 +1005,11 @@ def open_add_category_popup(user_id, tx_type, dropdown_widget, dropdown_var, par
 # ============================================================
 
 def show_auth_choice_screen():
-    clear_window()
+    global current_user
+    current_user = None
 
+    clear_window()
+    
     # Outer container — centers everything
     outer = tk.Frame(root, bg="#f0f4f8")
     outer.pack(expand=True, fill="both", padx=40, pady=30)
