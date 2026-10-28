@@ -1,15 +1,19 @@
-# Database file — contains personal user data
-budgeting_app.db
+# Local SQLite databases and sidecar files
+# These may contain personal or financial data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Python cache files
 __pycache__/
 *.py[cod]
-*.pyc
 
 # VSCode settings
 .vscode/
 
-# Virtual environment
+# Virtual environments
+.venv/
 venv/
 env/
 
@@ -17,5 +21,5 @@ env/
 Thumbs.db
 desktop.ini
 
-# MacOS system files
+# macOS system files
 .DS_Store
