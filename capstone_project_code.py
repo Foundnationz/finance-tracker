@@ -6882,6 +6882,164 @@ def show_add_subscription(user_id):
         width=10
     ).pack(side="left", padx=4)
 
+def link_existing_subscription_schedule(
+    user_id, sub_id, account_id, start_date_text
+):
+    """
+    Creates a shared schedule for an existing unlinked subscription.
+
+    Does not generate expenses or change account balances.
+    The caller must obtain explicit user confirmation before calling.
+
+    Returns:
+        (new_rule_id, first_due_date)
+    """
+    import math
+
+    try:
+        start_date = datetime.strptime(
+            start_date_text.strip(), "%Y-%m-%d"
+        ).date()
+
+        if start_date.isoformat() != start_date_text.strip():
+            raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError(
+            "Use YYYY-MM-DD for the start date."
+        ) from None
+
+    if account_id is None:
+        raise ValueError("Please select an account.")
+
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.cursor()
+
+        cursor.execute(
+            '''SELECT subscription_name, category, amount,
+                      charge_dates, notes, necessity, recurring_rule_id
+               FROM subscriptions
+               WHERE id = ? AND user_id = ?''',
+            (sub_id, user_id)
+        )
+        subscription = cursor.fetchone()
+
+        if subscription is None:
+            raise ValueError("The subscription no longer exists.")
+
+        (
+            name, category, stored_amount, charge_days,
+            notes, necessity, existing_rule_id
+        ) = subscription
+
+        if existing_rule_id is not None:
+            raise ValueError(
+                "This subscription already has a schedule. "
+                "Refresh the list instead of setting it up again."
+            )
+
+        if not name or not name.strip():
+            raise ValueError(
+                "Edit the subscription details and enter a name first."
+            )
+
+        try:
+            amount = float(stored_amount)
+            if not math.isfinite(amount) or amount <= 0:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError(
+                "Edit the subscription amount first. "
+                "It must be a finite number greater than zero."
+            ) from None
+
+        cursor.execute(
+            '''SELECT 1 FROM accounts
+               WHERE id = ? AND user_id = ?''',
+            (account_id, user_id)
+        )
+        if cursor.fetchone() is None:
+            raise ValueError(
+                "The selected account does not belong to this user "
+                "or no longer exists."
+            )
+
+        cursor.execute(
+            '''SELECT 1 FROM categories
+               WHERE user_id = ? AND type = 'expense' AND name = ?''',
+            (user_id, category)
+        )
+        if cursor.fetchone() is None:
+            raise ValueError(
+                "Edit the subscription and select an existing "
+                "expense category before setting up its schedule."
+            )
+
+        first_due = next_subscription_billing_date(
+            charge_days,
+            start_date,
+            inclusive=True
+        )
+
+        normalised_days = ",".join(
+            str(day)
+            for day in sorted({
+                int(part.strip()) for part in charge_days.split(",")
+            })
+        )
+
+        if necessity not in ("need", "want", "unset"):
+            necessity = "unset"
+
+        cursor.execute(
+            '''INSERT INTO recurring_transactions
+               (user_id, account_id, type, category, amount,
+                frequency, next_due_date, name, is_active,
+                notes, tags, necessity, schedule_kind,
+                monthly_charge_days, schedule_start_date)
+               VALUES (?, ?, 'expense', ?, ?, 'Monthly', ?, ?, 1,
+                       ?, '', ?, 'subscription', ?, ?)''',
+            (
+                user_id,
+                account_id,
+                category,
+                amount,
+                first_due.isoformat(),
+                name,
+                notes or "",
+                necessity,
+                normalised_days,
+                start_date.isoformat()
+            )
+        )
+        rule_id = cursor.lastrowid
+
+        cursor.execute(
+            '''UPDATE subscriptions
+               SET recurring_rule_id = ?,
+                   charge_dates = ?,
+                   necessity = ?
+               WHERE id = ? AND user_id = ?
+                 AND recurring_rule_id IS NULL''',
+            (
+                rule_id,
+                normalised_days,
+                necessity,
+                sub_id,
+                user_id
+            )
+        )
+
+        if cursor.rowcount != 1:
+            raise ValueError(
+                "The subscription changed during setup. "
+                "Nothing was saved; refresh and try again."
+            )
+
+        conn.commit()
+
+    return rule_id, first_due.isoformat()
+
 
 def show_subscription_list(user_id):
     clear_window()
