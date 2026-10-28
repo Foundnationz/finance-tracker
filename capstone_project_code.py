@@ -4956,6 +4956,57 @@ def show_edit_recurring(user_id, rec_id):
     frequency, next due date and account.
     Pre-fills all fields with existing values.
     """
+    # Subscriptions must use their specialised editor.
+    # Do this before clearing the current screen.
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''SELECT schedule_kind
+               FROM recurring_transactions
+               WHERE id = ? AND user_id = ?''',
+            (rec_id, user_id)
+        )
+        schedule_row = cursor.fetchone()
+
+        cursor.execute(
+            '''SELECT id
+               FROM subscriptions
+               WHERE recurring_rule_id = ? AND user_id = ?''',
+            (rec_id, user_id)
+        )
+        subscription_row = cursor.fetchone()
+
+    if schedule_row is None:
+        messagebox.showerror(
+            "Not Found",
+            "This recurring schedule no longer exists.",
+            parent=root
+        )
+        return
+
+    schedule_kind = schedule_row[0]
+
+    if schedule_kind == "subscription":
+        if subscription_row is None:
+            messagebox.showerror(
+                "Invalid Schedule Link",
+                "This subscription schedule has no linked subscription record.",
+                parent=root
+            )
+            return
+
+        show_edit_subscription(user_id, subscription_row[0])
+        return
+
+    if schedule_kind != "recurring" or subscription_row is not None:
+        messagebox.showerror(
+            "Invalid Schedule",
+            "The schedule type or subscription link is inconsistent. "
+            "Nothing was changed.",
+            parent=root
+        )
+        return
+    
     clear_window()
 
     # Load existing recurring transaction data
@@ -7189,6 +7240,38 @@ def show_edit_subscription(user_id, sub_id):
     Edit screen for a subscription.
     Allows editing name, category, amount and charge dates.
     """
+    # Temporary safety guard.
+    # Remove this guard when the shared-schedule editor is implemented.
+    with get_db() as conn:
+        row = conn.execute(
+            '''SELECT recurring_rule_id
+               FROM subscriptions
+               WHERE id = ? AND user_id = ?''',
+            (sub_id, user_id)
+        ).fetchone()
+
+    if row is None:
+        messagebox.showerror(
+            "Not Found",
+            "This subscription no longer exists.",
+            parent=root
+        )
+        return
+
+    if row[0] is not None:
+        messagebox.showinfo(
+            "Shared Schedule Editing Not Yet Enabled",
+            (
+                "This subscription uses a shared recurring schedule.\n\n"
+                "Editing is temporarily blocked until the shared-schedule "
+                "editor is installed, so the two records cannot "
+                "become inconsistent.\n\n"
+                "Nothing has been changed."
+            ),
+            parent=root
+        )
+        return
+    
     clear_window()
 
     # Load existing subscription data
