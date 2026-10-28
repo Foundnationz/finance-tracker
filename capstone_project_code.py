@@ -100,88 +100,6 @@ def get_db():
 def create_db():
     with get_db() as conn:
         cursor = conn.cursor()
-
-        # ============================================================
-        # SAFE COLUMN ADDITIONS
-        # ============================================================
-        # ALTER TABLE ADD COLUMN only runs if column doesn't exist.
-        # Each is wrapped in its own try/except so one failure
-        # doesn't stop the others from running.
-        # This is safe to run every time app starts.
-        # ============================================================
-
-        # Add notes column to transactions
-        try:
-            cursor.execute(
-                'ALTER TABLE transactions ADD COLUMN notes TEXT DEFAULT ""'
-            )
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass
-
-        # Add reference column to transactions
-        try:
-            cursor.execute(
-                'ALTER TABLE transactions ADD COLUMN reference TEXT DEFAULT ""'
-            )
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass
-
-        # Add necessity column to transactions
-        try:
-            cursor.execute(
-                'ALTER TABLE transactions ADD COLUMN necessity TEXT DEFAULT "unset"'
-            )
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass
-
-        # Add notes column to recurring_transactions
-        try:
-            cursor.execute(
-                'ALTER TABLE recurring_transactions ADD COLUMN notes TEXT DEFAULT ""'
-            )
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass
-
-        # Add tags column to recurring_transactions
-        # Stored as comma-separated string e.g. "fixed-cost, household"
-        try:
-            cursor.execute(
-                'ALTER TABLE recurring_transactions ADD COLUMN tags TEXT DEFAULT ""'
-            )
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass
-
-        # Add necessity column to recurring_transactions
-        try:
-            cursor.execute(
-                'ALTER TABLE recurring_transactions ADD COLUMN necessity TEXT DEFAULT "unset"'
-            )
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass
-
-        # Add notes column to subscriptions
-        try:
-            cursor.execute(
-                'ALTER TABLE subscriptions ADD COLUMN notes TEXT DEFAULT ""'
-            )
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass
-
-        # Add necessity column to subscriptions
-        try:
-            cursor.execute(
-                'ALTER TABLE subscriptions ADD COLUMN necessity TEXT DEFAULT "unset"'
-            )
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass
         
         # --- USERS TABLE ---
         # Stores login credentials and streak data for each user
@@ -359,6 +277,38 @@ def create_db():
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
         ''')
+
+        # Add optional fields AFTER all tables exist.
+        # These definitions are developer-controlled, not user input.
+        optional_columns = {
+            "transactions": {
+                "notes": "TEXT DEFAULT ''",
+                "reference": "TEXT DEFAULT ''",
+                "necessity": "TEXT DEFAULT 'unset'",
+            },
+            "recurring_transactions": {
+                "notes": "TEXT DEFAULT ''",
+                "tags": "TEXT DEFAULT ''",
+                "necessity": "TEXT DEFAULT 'unset'",
+            },
+            "subscriptions": {
+                "notes": "TEXT DEFAULT ''",
+                "necessity": "TEXT DEFAULT 'unset'",
+            },
+        }
+
+        for table_name, column_definitions in optional_columns.items():
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            existing_columns = {
+                column[1] for column in cursor.fetchall()
+            }
+
+            for column_name, definition in column_definitions.items():
+                if column_name not in existing_columns:
+                    cursor.execute(
+                        f'ALTER TABLE "{table_name}" '
+                        f'ADD COLUMN "{column_name}" {definition}'
+                    )
 
         # Add budget notes for existing databases.
         # Run this AFTER the budgets table has been created.
