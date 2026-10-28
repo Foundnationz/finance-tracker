@@ -7040,6 +7040,284 @@ def link_existing_subscription_schedule(
 
     return rule_id, first_due.isoformat()
 
+def show_subscription_schedule_setup(user_id, sub_id):
+    """
+    Sets up a shared schedule for an older, unlinked subscription.
+
+    Saving creates the schedule but does not process expenses.
+    Due occurrences are processed at the next login.
+    """
+    with get_db() as conn:
+        subscription = conn.execute(
+            '''SELECT subscription_name, category, amount,
+                      charge_dates, recurring_rule_id
+               FROM subscriptions
+               WHERE id = ? AND user_id = ?''',
+            (sub_id, user_id)
+        ).fetchone()
+
+    if subscription is None:
+        messagebox.showerror(
+            "Not Found", "Subscription no longer exists.", parent=root
+        )
+        return
+
+    name, category, amount, charge_days, linked_rule_id = subscription
+
+    if linked_rule_id is not None:
+        messagebox.showinfo(
+            "Already Set Up",
+            "This subscription already has a shared schedule.",
+            parent=root
+        )
+        show_subscription_list(user_id)
+        return
+
+    clear_window()
+    sym = get_currency(user_id)
+
+    header = tk.Frame(root, bg="#2b6cb0", pady=12)
+    header.pack(fill="x")
+
+    tk.Label(
+        header,
+        text="Set Up Subscription Schedule",
+        font=("Segoe UI", 16, "bold"),
+        bg="#2b6cb0",
+        fg="white"
+    ).pack()
+
+    btn_bar = tk.Frame(root, bg="#f0f4f8", pady=10)
+    btn_bar.pack(side="bottom", fill="x", padx=20)
+
+    body = make_scrollable_frame(root)
+
+    tk.Label(
+        body,
+        text=(
+            f"Subscription: {name}\n"
+            f"Category: {category}\n"
+            f"Amount per occurrence: {sym}{amount:,.2f}\n"
+            f"Monthly billing days: {charge_days}"
+        ),
+        font=("Segoe UI", 10),
+        bg="#f0f4f8",
+        fg="#2d3748",
+        justify="left",
+        wraplength=500
+    ).pack(anchor="w", padx=20, pady=15)
+
+    tk.Label(
+        body,
+        text=(
+            "Choose when this app should begin recording expenses—not "
+            "necessarily when the subscription originally began.\n\n"
+            "A past start date can create catch-up expenses at the next login. "
+            "Do not include dates whose payments are already recorded manually "
+            "or through another recurring schedule.\n\n"
+            "Days that do not exist in a month are skipped."
+        ),
+        font=("Segoe UI", 9),
+        bg="#f0f4f8",
+        fg="#718096",
+        justify="left",
+        wraplength=500
+    ).pack(anchor="w", padx=20, pady=(0, 12))
+
+    tk.Label(
+        body,
+        text="Account:",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", padx=20)
+
+    accounts = view_accounts(user_id)
+    account_options = {
+        f"{acc[1]} (ID {acc[0]}) | {sym}{acc[2]:,.2f}": acc[0]
+        for acc in accounts
+    }
+
+    # Require an explicit choice rather than guessing the account.
+    account_var = tk.StringVar(value="")
+    account_dd = ttk.Combobox(
+        body,
+        textvariable=account_var,
+        values=list(account_options),
+        state="readonly",
+        width=45
+    )
+    account_dd.pack(anchor="w", padx=20, pady=(3, 12))
+
+    tk.Label(
+        body,
+        text="Start Recording From (YYYY-MM-DD):",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", padx=20)
+
+    start_entry = make_entry(body, width=25)
+    start_entry.insert(0, datetime.today().strftime("%Y-%m-%d"))
+    start_entry.pack(anchor="w", padx=20, pady=(3, 12))
+
+    checked_var = tk.BooleanVar(value=False)
+
+    tk.Checkbutton(
+        body,
+        text=(
+            "I checked that this payment is not already scheduled elsewhere "
+            "and that the selected dates will not duplicate recorded expenses."
+        ),
+        variable=checked_var,
+        bg="#f0f4f8",
+        font=("Segoe UI", 9),
+        wraplength=500,
+        justify="left",
+        anchor="w"
+    ).pack(anchor="w", padx=20, pady=8)
+
+    msg_label = tk.Label(
+        body,
+        text="",
+        font=("Segoe UI", 10),
+        bg="#f0f4f8",
+        fg="red",
+        wraplength=500,
+        justify="left"
+    )
+    msg_label.pack(anchor="w", padx=20, pady=10)
+
+    saved = False
+
+    def on_save():
+        nonlocal saved
+        import math
+
+        if saved:
+            return
+
+        account_id = account_options.get(account_var.get())
+
+        if account_id is None:
+            msg_label.config(text="Please select an account.")
+            return
+
+        if not checked_var.get():
+            msg_label.config(
+                text="Please check for duplicate schedules and expenses first."
+            )
+            return
+
+        try:
+            start_text = start_entry.get().strip()
+            start_date = datetime.strptime(
+                start_text, "%Y-%m-%d"
+            ).date()
+
+            if start_date.isoformat() != start_text:
+                raise ValueError("Use YYYY-MM-DD for the start date.")
+
+            preview_amount = float(amount)
+            if not math.isfinite(preview_amount) or preview_amount <= 0:
+                raise ValueError(
+                    "Edit the subscription amount before setting up its schedule."
+                )
+
+            first_due = next_subscription_billing_date(
+                charge_days, start_date, inclusive=True
+            )
+
+            today = datetime.today().date()
+            due_count = 0
+            candidate = first_due
+
+            while candidate <= today:
+                due_count += 1
+                candidate = next_subscription_billing_date(
+                    charge_days, candidate, inclusive=False
+                )
+
+        except (TypeError, ValueError, OverflowError) as error:
+            msg_label.config(text=f"Check the schedule settings: {error}")
+            return
+
+        confirmed = messagebox.askyesno(
+            "Confirm Schedule Setup",
+            (
+                f"Subscription: {name}\n"
+                f"Account: {account_var.get()}\n"
+                f"Start recording from: {start_text}\n"
+                f"First scheduled date: {first_due.isoformat()}\n\n"
+                f"Occurrences due as of today: {due_count}\n"
+                f"Total due as of today: "
+                f"{sym}{preview_amount * due_count:,.2f}\n\n"
+                "Saving activates the schedule but does not record expenses "
+                "immediately. Processing happens at the next login. "
+                "Additional dates may become due before then.\n\n"
+                "This records expenses inside the app; it does not pay "
+                "the provider.\n\nContinue?"
+            ),
+            parent=root
+        )
+
+        if not confirmed:
+            return
+
+        try:
+            # Refuse to use an outdated preview if the subscription
+            # details changed while this screen was open.
+            with get_db() as conn:
+                current = conn.execute(
+                    '''SELECT subscription_name, category, amount,
+                              charge_dates, recurring_rule_id
+                       FROM subscriptions
+                       WHERE id = ? AND user_id = ?''',
+                    (sub_id, user_id)
+                ).fetchone()
+
+            if current != subscription:
+                raise ValueError(
+                    "The subscription changed while this screen was open. "
+                    "Return to the list and reopen setup."
+                )
+
+            link_existing_subscription_schedule(
+                user_id, sub_id, account_id, start_text
+            )
+
+        except (sqlite3.Error, ValueError, OverflowError) as error:
+            msg_label.config(text=f"Could not set up schedule: {error}")
+            return
+
+        saved = True
+        save_button.config(state="disabled")
+
+        messagebox.showinfo(
+            "Schedule Activated",
+            (
+                "The subscription is now linked to a shared schedule.\n\n"
+                "No expenses were generated by saving setup. "
+                "Due occurrences will be checked at the next login."
+            ),
+            parent=root
+        )
+        show_subscription_list(user_id)
+
+    save_button = make_button(
+        btn_bar,
+        "Activate Schedule",
+        on_save,
+        color="#38a169",
+        width=18
+    )
+    save_button.pack(side="left", padx=5)
+
+    make_button(
+        btn_bar,
+        "Back",
+        lambda: show_subscription_list(user_id),
+        color="#718096",
+        width=12
+    ).pack(side="left", padx=5)
 
 def show_subscription_list(user_id):
     clear_window()
@@ -7249,8 +7527,9 @@ def show_subscription_list(user_id):
         elif is_unlinked:
             explanation = (
                 "This older subscription is not connected to the shared "
-                "scheduler. No automatic expenses are generated by that "
-                "scheduler for this record. Schedule setup will be added next."
+                "scheduler. Use Set Up Schedule to choose its account "
+                "and recording start date. Check for existing duplicate "
+                "schedules before activating it."
             )
 
         else:
@@ -7334,6 +7613,16 @@ def show_subscription_list(user_id):
             ).pack(side="left", padx=3)
 
         elif is_unlinked:
+            make_button(
+                action_row,
+                "Set Up Schedule",
+                lambda sid=sub_id: show_subscription_schedule_setup(
+                    user_id, sid
+                ),
+                color="#38a169",
+                width=16
+            ).pack(side="left", padx=3)
+
             make_button(
                 action_row,
                 "Edit Details",
