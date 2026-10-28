@@ -6154,208 +6154,420 @@ def update_transaction(transaction_id, user_id,
         conn.commit()
 
 def show_add_subscription(user_id):
+    import math
+
     clear_window()
+    sym = get_currency(user_id)
 
     header = tk.Frame(root, bg="#2b6cb0", pady=12)
     header.pack(fill="x")
-    tk.Label(header, text="🔄 Subscriptions", font=("Segoe UI", 16, "bold"),
-             fg="white", bg="#2b6cb0").pack()
+    tk.Label(
+        header,
+        text="🔄 Add Subscription",
+        font=("Segoe UI", 16, "bold"),
+        fg="white",
+        bg="#2b6cb0"
+    ).pack()
 
-    body = make_scrollable_frame(root)  
+    # Reserve space for buttons before creating the scrollable body.
+    btn_bar = tk.Frame(root, bg="#f0f4f8", pady=10)
+    btn_bar.pack(side="bottom", fill="x", padx=10)
 
-    # Subscription name
-    tk.Label(body, text="Subscription Name:", font=("Segoe UI", 10, "bold"),
-             bg="#f0f4f8").pack(anchor="w")
-    name_entry = make_entry(body)
-    name_entry.pack(anchor="w", pady=(2, 10))
+    body = make_scrollable_frame(root)
 
-    # Category dropdown with Add Category button
-    tk.Label(body, text="Category:", font=("Segoe UI", 10, "bold"),
-             bg="#f0f4f8").pack(anchor="w")
+    def field_label(text):
+        tk.Label(
+            body,
+            text=text,
+            font=("Segoe UI", 10, "bold"),
+            bg="#f0f4f8"
+        ).pack(anchor="w", padx=20, pady=(8, 2))
 
-    # Horizontal frame for dropdown and button
+    field_label("Subscription Name:")
+    name_entry = make_entry(body, width=35)
+    name_entry.pack(anchor="w", padx=20)
+
+    field_label("Expense Category:")
     cat_row = tk.Frame(body, bg="#f0f4f8")
-    cat_row.pack(anchor="w", pady=(2, 10))
+    cat_row.pack(anchor="w", padx=20)
 
     categories = get_expense_categories(user_id)
-    category_var = tk.StringVar(value=categories[0] if categories else "General")
-    category_dd = ttk.Combobox(cat_row, textvariable=category_var,
-                               values=categories, state="readonly", width=25)
+    category_var = tk.StringVar(
+        value=categories[0] if categories else ""
+    )
+    category_dd = ttk.Combobox(
+        cat_row,
+        textvariable=category_var,
+        values=categories,
+        state="readonly",
+        width=25
+    )
     category_dd.pack(side="left")
 
-    # Add Category button — expense categories only for subscriptions
     make_button(
-        cat_row, "+ Add Category",
+        cat_row,
+        "+ Add Category",
         lambda: open_add_category_popup(
             user_id, "expense", category_dd, category_var
         ),
-        color="#3182ce", width=14
+        color="#3182ce",
+        width=14
     ).pack(side="left", padx=6)
 
-    # Charge dates
-    tk.Label(body, text="Charge Dates (comma separated day numbers e.g. 1,15):",
-             font=("Segoe UI", 10, "bold"), bg="#f0f4f8").pack(anchor="w")
+    field_label("Monthly Billing Days (for example 1,15):")
     dates_entry = make_entry(body)
-    dates_entry.pack(anchor="w", pady=(2, 10))
+    dates_entry.pack(anchor="w", padx=20)
 
-    # Amount
-    tk.Label(body, text="Amount ($):", font=("Segoe UI", 10, "bold"),
-             bg="#f0f4f8").pack(anchor="w")
+    tk.Label(
+        body,
+        text="Days that do not exist in a month are skipped.",
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8",
+        fg="#718096"
+    ).pack(anchor="w", padx=20)
+
+    field_label("Start Recording From (YYYY-MM-DD):")
+    start_entry = make_entry(body)
+    start_entry.insert(0, datetime.today().strftime("%Y-%m-%d"))
+    start_entry.pack(anchor="w", padx=20)
+
+    tk.Label(
+        body,
+        text=(
+            "A past start date records missed billing occurrences. "
+            "This can reduce your in-app account balance."
+        ),
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8",
+        fg="#718096",
+        wraplength=500,
+        justify="left"
+    ).pack(anchor="w", padx=20)
+
+    field_label(f"Amount Per Occurrence ({sym}):")
     amount_entry = make_entry(body)
-    amount_entry.pack(anchor="w", pady=(2, 10))
+    amount_entry.pack(anchor="w", padx=20)
 
-    # ── Notes field ───────────────────────────────────────────
-    tk.Label(body, text="Notes (optional):",
-             font=("Segoe UI", 10, "bold"),
-             bg="#f0f4f8").pack(anchor="w")
-    tk.Label(body,
-             text="e.g. Student plan, Annual billing, Shared with family",
-             font=("Segoe UI", 8, "italic"),
-             bg="#f0f4f8", fg="#718096").pack(anchor="w")
+    field_label("Notes (optional):")
     notes_entry = make_entry(body, width=40)
-    notes_entry.pack(anchor="w", pady=(2, 10))
+    notes_entry.pack(anchor="w", padx=20)
 
-    # ── Necessity field ───────────────────────────────────────
-    # Subscriptions are always expenses
-    tk.Label(body, text="Necessity:",
-             font=("Segoe UI", 10, "bold"),
-             bg="#f0f4f8").pack(anchor="w")
-    tk.Label(body,
-             text="Is this subscription a need or a want?",
-             font=("Segoe UI", 8, "italic"),
-             bg="#f0f4f8", fg="#718096").pack(anchor="w")
+    field_label("Necessity:")
     necessity_var = tk.StringVar(value="unset")
     necessity_frame = tk.Frame(body, bg="#f0f4f8")
-    necessity_frame.pack(anchor="w", pady=(2, 10))
-    tk.Radiobutton(necessity_frame, text="✅ Need",
-                   variable=necessity_var, value="need",
-                   bg="#f0f4f8", font=("Segoe UI", 10)).pack(side="left")
-    tk.Radiobutton(necessity_frame, text="🛍️ Want",
-                   variable=necessity_var, value="want",
-                   bg="#f0f4f8", font=("Segoe UI", 10)).pack(side="left", padx=10)
-    tk.Radiobutton(necessity_frame, text="— Not set",
-                   variable=necessity_var, value="unset",
-                   bg="#f0f4f8", font=("Segoe UI", 10)).pack(side="left")
+    necessity_frame.pack(anchor="w", padx=20)
 
-    # Account dropdown
-    tk.Label(body, text="Account:", font=("Segoe UI", 10, "bold"),
-             bg="#f0f4f8").pack(anchor="w")
+    for label, value in [
+        ("Need", "need"),
+        ("Want", "want"),
+        ("Not set", "unset")
+    ]:
+        tk.Radiobutton(
+            necessity_frame,
+            text=label,
+            variable=necessity_var,
+            value=value,
+            bg="#f0f4f8",
+            font=("Segoe UI", 10)
+        ).pack(side="left", padx=(0, 10))
+
+    field_label("Account:")
     accounts = view_accounts(user_id)
-    sym = get_currency(user_id)          # ← Add this line
+
+    # Include the ID in each label to avoid ambiguous account labels.
     account_options = {
-        f"{acc[1]} | Balance: {sym}{acc[2]:,.2f}": acc[0]  # ← Use sym
+        f"{acc[1]} (ID {acc[0]}) | {sym}{acc[2]:,.2f}": acc[0]
         for acc in accounts
     }
     account_var = tk.StringVar(
-        value=list(account_options.keys())[0] if account_options else ""
+        value=next(iter(account_options), "")
     )
-    account_dd = ttk.Combobox(body, textvariable=account_var,
-                              values=list(account_options.keys()),
-                              state="readonly", width=35)
-    account_dd.pack(anchor="w", pady=(2, 10))
+    account_dd = ttk.Combobox(
+        body,
+        textvariable=account_var,
+        values=list(account_options),
+        state="readonly",
+        width=45
+    )
+    account_dd.pack(anchor="w", padx=20)
 
-    msg_label = tk.Label(body, text="", font=("Segoe UI", 10),
-                         bg="#f0f4f8", fg="red", wraplength=400)
-    msg_label.pack(pady=5)
+    msg_label = tk.Label(
+        body,
+        text="",
+        font=("Segoe UI", 10),
+        bg="#f0f4f8",
+        fg="red",
+        wraplength=500,
+        justify="left"
+    )
+    msg_label.pack(anchor="w", padx=20, pady=12)
+
+    saved = False
 
     def on_submit():
-        name        = name_entry.get().strip()
-        category    = category_var.get()
-        charge_dates = dates_entry.get().strip()
-        account_id  = account_options.get(account_var.get())
-        notes       = notes_entry.get().strip()
-        necessity   = necessity_var.get()
+        nonlocal saved
 
-        # Validate name
+        if saved:
+            return
+
+        name = name_entry.get().strip()
+        category = category_var.get().strip()
+        account_id = account_options.get(account_var.get())
+        notes = notes_entry.get().strip()
+        necessity = necessity_var.get()
+
         if not name:
-            msg_label.config(text="❌ Subscription name cannot be empty.", fg="red")
+            msg_label.config(
+                text="Please enter a subscription name.", fg="red"
+            )
             return
 
-        # Validate account selected
-        if not account_id:
-            msg_label.config(text="❌ Please select an account.", fg="red")
+        if not category:
+            msg_label.config(
+                text="Please select or add an expense category.", fg="red"
+            )
             return
 
-        # Validate amount
+        if account_id is None:
+            msg_label.config(
+                text="Please select an account.", fg="red"
+            )
+            return
+
         try:
             amount = float(amount_entry.get().strip())
-        except ValueError:
-            msg_label.config(text="❌ Amount must be a valid number.", fg="red")
-            return
-
-        if amount <= 0:
-            msg_label.config(text="❌ Amount must be greater than 0.", fg="red")
-            return
-
-        # Validate charge dates — must be integers between 1 and 31
-        try:
-            date_list = [int(d.strip()) for d in charge_dates.split(",")]
-            if not all(1 <= d <= 31 for d in date_list):
+            if not math.isfinite(amount) or amount <= 0:
                 raise ValueError
-        except ValueError:
+        except (ValueError, OverflowError):
             msg_label.config(
-                text="❌ Charge dates must be numbers between 1 and 31 separated by commas.",
+                text="Amount must be a finite number greater than zero.",
                 fg="red"
             )
             return
 
-        with get_db() as conn:
-            cursor = conn.cursor()
+        if necessity not in ("need", "want", "unset"):
+            msg_label.config(text="Invalid necessity selection.", fg="red")
+            return
 
-            # Check subscription limit
-            cursor.execute(
-                "SELECT COUNT(*) FROM subscriptions WHERE user_id = ?", (user_id,)
+        try:
+            start_text = start_entry.get().strip()
+            start_date = datetime.strptime(
+                start_text, "%Y-%m-%d"
+            ).date()
+
+            if start_date.isoformat() != start_text:
+                raise ValueError
+
+            # The helper validates the full billing-day input.
+            first_due = next_subscription_billing_date(
+                dates_entry.get().strip(),
+                start_date,
+                inclusive=True
             )
-            if cursor.fetchone()[0] >= 5:
-                msg_label.config(text="❌ Maximum 5 subscriptions reached.", fg="red")
+
+            billing_days = ",".join(
+                str(day)
+                for day in sorted({
+                    int(part.strip())
+                    for part in dates_entry.get().split(",")
+                })
+            )
+        except ValueError:
+            msg_label.config(
+                text=(
+                    "Use YYYY-MM-DD for the start date and billing days "
+                    "from 1 to 31 separated by commas."
+                ),
+                fg="red"
+            )
+            return
+
+        today = datetime.today().date()
+
+        # Count and preview the occurrences that would be recorded now.
+        due_count = 0
+        preview_due = first_due
+
+        while preview_due <= today:
+            due_count += 1
+            preview_due = next_subscription_billing_date(
+                billing_days, preview_due, inclusive=False
+            )
+
+        if due_count:
+            confirmed = messagebox.askyesno(
+                "Confirm Scheduled Expenses",
+                (
+                    f"This new schedule will record {due_count} "
+                    f"expense(s), totaling {sym}{amount * due_count:,.2f}, "
+                    f"on the selected account.\n\n"
+                    "This only changes records and balances inside this app; "
+                    "it does not pay the provider.\n\n"
+                    "Do not continue if these payments are already recorded "
+                    "manually or through another recurring schedule.\n\n"
+                    "Continue?"
+                ),
+                parent=root
+            )
+            if not confirmed:
                 return
 
-            # Check for duplicate subscription name
-            cursor.execute(
-                "SELECT 1 FROM subscriptions WHERE user_id = ? AND subscription_name = ?",
-                (user_id, name)
+        try:
+            with get_db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.cursor()
+
+                cursor.execute(
+                    "SELECT COUNT(*) FROM subscriptions WHERE user_id = ?",
+                    (user_id,)
+                )
+                if cursor.fetchone()[0] >= 5:
+                    msg_label.config(
+                        text="Maximum 5 subscriptions reached.", fg="red"
+                    )
+                    return
+
+                cursor.execute(
+                    '''SELECT 1 FROM subscriptions
+                       WHERE user_id = ?
+                         AND subscription_name = ? COLLATE NOCASE''',
+                    (user_id, name)
+                )
+                if cursor.fetchone():
+                    msg_label.config(
+                        text="A subscription with this name already exists.",
+                        fg="red"
+                    )
+                    return
+
+                # Recheck ownership and category existence at save time.
+                cursor.execute(
+                    "SELECT 1 FROM accounts WHERE id = ? AND user_id = ?",
+                    (account_id, user_id)
+                )
+                if not cursor.fetchone():
+                    msg_label.config(
+                        text="The selected account no longer exists.",
+                        fg="red"
+                    )
+                    return
+
+                cursor.execute(
+                    '''SELECT 1 FROM categories
+                       WHERE user_id = ? AND type = 'expense' AND name = ?''',
+                    (user_id, category)
+                )
+                if not cursor.fetchone():
+                    msg_label.config(
+                        text="Please select an existing expense category.",
+                        fg="red"
+                    )
+                    return
+
+                cursor.execute(
+                    '''INSERT INTO recurring_transactions
+                       (user_id, account_id, type, category, amount,
+                        frequency, next_due_date, name, is_active,
+                        notes, tags, necessity, schedule_kind,
+                        monthly_charge_days, schedule_start_date)
+                       VALUES (?, ?, 'expense', ?, ?, 'Monthly', ?, ?, 1,
+                               ?, '', ?, 'subscription', ?, ?)''',
+                    (
+                        user_id,
+                        account_id,
+                        category,
+                        amount,
+                        first_due.isoformat(),
+                        name,
+                        notes,
+                        necessity,
+                        billing_days,
+                        start_date.isoformat()
+                    )
+                )
+                rule_id = cursor.lastrowid
+
+                cursor.execute(
+                    '''INSERT INTO subscriptions
+                       (user_id, subscription_name, category, amount,
+                        charge_dates, notes, necessity, recurring_rule_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (
+                        user_id,
+                        name,
+                        category,
+                        amount,
+                        billing_days,
+                        notes,
+                        necessity,
+                        rule_id
+                    )
+                )
+                conn.commit()
+
+        except sqlite3.Error as error:
+            msg_label.config(
+                text=f"Could not save the subscription: {error}",
+                fg="red"
             )
-            if cursor.fetchone():
-                msg_label.config(text="❌ Subscription name already exists.", fg="red")
-                return
+            return
 
-            # Insert subscription into database with new fields
-            cursor.execute(
-                '''INSERT INTO subscriptions
-                   (user_id, subscription_name, category, amount,
-                    charge_dates, notes, necessity)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (user_id, name, category, amount,
-                 charge_dates, notes, necessity)
+        # Saving succeeded. Never let a processing failure cause the
+        # user to accidentally submit the same subscription again.
+        saved = True
+        save_button.config(state="disabled")
+
+        try:
+            # This processes ALL due rules for this user, not only the new one.
+            process_recurring_transactions(user_id)
+        except (sqlite3.Error, ValueError, OverflowError) as error:
+            messagebox.showwarning(
+                "Subscription Saved — Processing Incomplete",
+                (
+                    "The subscription and its schedule were saved.\n"
+                    "Do not add it again.\n\n"
+                    "Due-schedule processing did not complete. "
+                    "Review the error before retrying processing:\n\n"
+                    f"{error}"
+                ),
+                parent=root
             )
-            # Capture the new subscription's ID so we can link
-            # any generated transaction back to it
-            new_sub_id = cursor.lastrowid
-            conn.commit()
+        else:
+            messagebox.showinfo(
+                "Subscription Saved",
+                (
+                    "The subscription and shared schedule were saved.\n"
+                    "Due schedules have been checked."
+                ),
+                parent=root
+            )
 
-        # Auto-charge today if charge date matches
-        # Pass the new subscription ID, notes and necessity
-        # so the generated transaction is linked correctly
-        process_subscription_transaction(
-            user_id, new_sub_id, name, category,
-            charge_dates, amount, account_id,
-            notes, necessity
-        )
+        show_subscription_list(user_id)
 
-        msg_label.config(text="✅ Subscription added successfully!", fg="green")
-        root.after(1000, lambda: show_subscription_list(user_id))
+    save_button = make_button(
+        btn_bar,
+        "Save Subscription",
+        on_submit,
+        color="#38a169",
+        width=18
+    )
+    save_button.pack(side="left", padx=4)
 
-    # Buttons
-    btn_frame = tk.Frame(body, bg="#f0f4f8")
-    btn_frame.pack(pady=10)
-    make_button(btn_frame, "✅ Add Subscription",
-                on_submit, color="#38a169").pack(side="left", padx=5)
-    make_button(btn_frame, "📋 View Subscriptions",
-                lambda: show_subscription_list(user_id),
-                color="#3182ce").pack(side="left", padx=5)
-    make_button(btn_frame, "← Back to Menu",
-                lambda: show_main_menu(current_user),
-                color="#718096").pack(side="left", padx=5)
+    make_button(
+        btn_bar,
+        "View Subscriptions",
+        lambda: show_subscription_list(user_id),
+        color="#3182ce",
+        width=18
+    ).pack(side="left", padx=4)
+
+    make_button(
+        btn_bar,
+        "Back",
+        lambda: show_main_menu(current_user),
+        color="#718096",
+        width=10
+    ).pack(side="left", padx=4)
 
 
 def show_subscription_list(user_id):
