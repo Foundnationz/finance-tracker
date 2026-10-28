@@ -4209,7 +4209,9 @@ def process_recurring_transactions(user_id):
         cursor.execute(
             '''SELECT id, account_id, type, category, amount,
                       frequency, next_due_date, name,
-                      notes, tags, necessity
+                      notes, tags, necessity,
+                      schedule_kind, monthly_charge_days,
+                      schedule_start_date
                FROM recurring_transactions
                WHERE user_id = ? AND is_active = 1
                AND next_due_date <= ?''',
@@ -4220,7 +4222,9 @@ def process_recurring_transactions(user_id):
         for item in due_items:
             (rec_id, account_id, tx_type, category,
              amount, frequency, next_due_date_str, name,
-             notes, tags, necessity) = item
+             notes, tags, necessity,
+             schedule_kind, monthly_charge_days,
+             schedule_start_date) = item
 
             # Fallback for rows created before columns existed
             notes     = notes     or ""
@@ -4230,6 +4234,33 @@ def process_recurring_transactions(user_id):
             next_due = datetime.strptime(
                 next_due_date_str, "%Y-%m-%d"
             ).date()
+
+            # Subscription schedules must have an explicit start date
+            # and must represent expenses.
+            if schedule_kind == "subscription":
+                if tx_type != "expense":
+                    raise ValueError(
+                        f"Subscription rule {rec_id} must be an expense."
+                    )
+
+                if not schedule_start_date:
+                    raise ValueError(
+                        f"Subscription rule {rec_id} is missing its start date."
+                    )
+
+                start_date = datetime.strptime(
+                    schedule_start_date, "%Y-%m-%d"
+                ).date()
+
+                # Never generate an occurrence before the schedule begins.
+                search_from = max(next_due, start_date)
+
+                # Also ensure next_due falls on a valid billing day.
+                next_due = next_subscription_billing_date(
+                    monthly_charge_days,
+                    search_from,
+                    inclusive=True
+                )
 
             # Keep looping until next_due is in the future
             # This catches ALL missed dates not just one
@@ -4325,18 +4356,31 @@ def process_recurring_transactions(user_id):
                         (amount, account_id)
                     )
 
-                # Move next_due forward by one frequency period
-                if frequency == "Daily":
+                # Advance to the next scheduled occurrence.
+                if schedule_kind == "subscription":
+                    next_due = next_subscription_billing_date(
+                        monthly_charge_days,
+                        next_due,
+                        inclusive=False
+                    )
+
+                elif frequency == "Daily":
                     next_due = next_due + timedelta(days=1)
+
                 elif frequency == "Weekly":
                     next_due = next_due + timedelta(weeks=1)
+
                 elif frequency == "Monthly":
                     next_due = next_due + relativedelta(months=1)
+
                 elif frequency == "Yearly":
                     next_due = next_due + relativedelta(years=1)
+
                 else:
-                    # Safety fallback — move forward one month
-                    next_due = next_due + relativedelta(months=1)
+                    raise ValueError(
+                        f"Unsupported frequency for recurring rule "
+                        f"{rec_id}: {frequency}"
+                    )
 
             # After all catch-up done save the new next due date
             cursor.execute(
