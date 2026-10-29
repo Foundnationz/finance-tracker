@@ -11730,6 +11730,195 @@ def render_subscription_cost_review(
         width=22
     ).pack(anchor="w", padx=12, pady=(0, 12))
 
+def render_needs_wants_reflection(
+    parent,
+    user_id,
+    selected_year,
+    selected_month,
+    reference_date=None
+):
+    """
+    Displays Need/Want expense information for the selected month.
+
+    Reads data only. Does not change classifications or balances.
+    """
+    section = tk.Frame(
+        parent,
+        bg="#f0fff4",
+        relief="solid",
+        bd=1
+    )
+    section.pack(fill="x", pady=10)
+
+    tk.Label(
+        section,
+        text="Selected-Period Needs/Wants Reflection",
+        font=("Segoe UI", 12, "bold"),
+        bg="#f0fff4",
+        fg="#276749"
+    ).pack(anchor="w", padx=12, pady=(10, 4))
+
+    try:
+        result = get_needs_wants_reflection(
+            user_id,
+            selected_year,
+            selected_month,
+            reference_date=reference_date
+        )
+    except (sqlite3.Error, ValueError, OverflowError) as error:
+        tk.Label(
+            section,
+            text=f"Needs/Wants reflection is unavailable: {error}",
+            font=("Segoe UI", 9),
+            bg="#f0fff4",
+            fg="#c53030",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+        return
+
+    sym = get_currency(user_id)
+
+    tk.Label(
+        section,
+        text=(
+            f"Selected calendar month: {result['period_start']} "
+            f"→ {result['period_last_day']}\n"
+            f"Recorded expenses counted through: "
+            f"{result['counted_through']}"
+        ),
+        font=("Segoe UI", 9),
+        bg="#f0fff4",
+        fg="#4a5568",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    if result["invalid_amount_count"]:
+        tk.Label(
+            section,
+            text=(
+                f"Data-quality notice: "
+                f"{result['invalid_amount_count']} expense record(s) "
+                "with invalid amounts were excluded."
+            ),
+            font=("Segoe UI", 9),
+            bg="#f0fff4",
+            fg="#975a16",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    totals = [
+        ("Needs", result["need_total"], "#276749"),
+        ("Wants", result["want_total"], "#805ad5"),
+        ("Unclassified", result["unclassified_total"], "#975a16"),
+        ("Total valid recorded expenses", result["total_expenses"], "#2d3748")
+    ]
+
+    for label, amount, color in totals:
+        tk.Label(
+            section,
+            text=f"{label}: {sym}{amount:,.2f}",
+            font=("Segoe UI", 10, "bold"),
+            bg="#f0fff4",
+            fg=color,
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=2)
+
+    if result["classified_total"] > 0:
+        tk.Label(
+            section,
+            text=(
+                f"Among classified expenses only "
+                f"({sym}{result['classified_total']:,.2f}):\n"
+                f"Needs: {result['need_percent_of_classified']:.1f}%\n"
+                f"Wants: {result['want_percent_of_classified']:.1f}%"
+            ),
+            font=("Segoe UI", 9),
+            bg="#f0fff4",
+            fg="#4a5568",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+
+    elif result["total_expenses"] > 0:
+        tk.Label(
+            section,
+            text=(
+                "No positive expense amount has been classified "
+                "as Need or Want, so a classified spending split "
+                "cannot be calculated."
+            ),
+            font=("Segoe UI", 9),
+            bg="#f0fff4",
+            fg="#718096",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+
+    else:
+        tk.Label(
+            section,
+            text=(
+                "No positive valid expense total was found for this range. "
+                "This does not establish that no real spending occurred."
+            ),
+            font=("Segoe UI", 9),
+            bg="#f0fff4",
+            fg="#718096",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+
+    # Provide a review suggestion only when Wants are actually recorded.
+    if result["want_total"] > 0:
+        tk.Label(
+            section,
+            text=(
+                "If you want to make room for savings or other goals, "
+                "consider reviewing expenses you labelled as Wants. "
+                "Decide which, if any, can reasonably be reduced."
+            ),
+            font=("Segoe UI", 10),
+            bg="#f0fff4",
+            fg="#276749",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(6, 4))
+
+    if result["unclassified_total"] > 0:
+        tk.Label(
+            section,
+            text=(
+                "Consider reviewing unclassified expenses to make this "
+                "reflection more complete. Unclassified entries include "
+                "Not set and any unrecognised stored classification."
+            ),
+            font=("Segoe UI", 9),
+            bg="#f0fff4",
+            fg="#975a16",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(4, 6))
+
+    tk.Label(
+        section,
+        text=(
+            result["limitation"]
+            + " The percentages above use classified expenses, not income. "
+              "They must not be compared directly with the 50/30/20 "
+              "income-allocation guideline. Labels are user supplied, "
+              "and expenses such as balance adjustments may be included."
+        ),
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0fff4",
+        fg="#718096",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(6, 12))
+
 # ============================================================
 # DASHBOARD SCREEN
 # ============================================================
@@ -11857,6 +12046,14 @@ def show_dashboard(user_id):
 
         # Selected-period analysis is separate from today's budget guidance.
         render_category_spending_recommendations(
+            results_frame,
+            user_id,
+            selected_year=int(selected_year),
+            selected_month=int(selected_month),
+            reference_date=datetime.today().date()
+        )
+
+        render_needs_wants_reflection(
             results_frame,
             user_id,
             selected_year=int(selected_year),
