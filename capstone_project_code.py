@@ -2795,6 +2795,86 @@ def calculate_budget_progress(budget_id, user_id, reference_date=None):
 
     return (total_spent / budget_limit) * 100
 
+def get_spending_comparison_periods(
+    selected_year,
+    selected_month,
+    reference_date=None
+):
+    """
+    Returns date ranges for a selected-month spending comparison.
+
+    All ranges use an inclusive start and exclusive end.
+
+    Current month:
+        Compare equal numbers of elapsed days, limited by
+        the previous month's length.
+
+    Completed month:
+        Compare both full calendar months.
+
+    Future month:
+        Raise ValueError.
+
+    This function reads no database data.
+    """
+    from datetime import date
+
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    selected_start = date(selected_year, selected_month, 1)
+    current_month_start = reference_date.replace(day=1)
+
+    if selected_start > current_month_start:
+        raise ValueError(
+            "Spending comparisons are not available for future months."
+        )
+
+    previous_start = selected_start - relativedelta(months=1)
+    selected_month_end = selected_start + relativedelta(months=1)
+
+    is_current_month = selected_start == current_month_start
+
+    if is_current_month:
+        previous_month_days = (
+            selected_start - previous_start
+        ).days
+
+        matched_days = min(
+            reference_date.day,
+            previous_month_days
+        )
+
+        selected_end = selected_start + timedelta(days=matched_days)
+        previous_end = previous_start + timedelta(days=matched_days)
+        comparison_mode = "matched_elapsed_days"
+
+    else:
+        selected_end = selected_month_end
+        previous_end = selected_start
+        comparison_mode = "full_months"
+
+    selected_days = (selected_end - selected_start).days
+    previous_days = (previous_end - previous_start).days
+
+    return {
+        "mode": comparison_mode,
+        "as_of": reference_date.isoformat(),
+        "selected_start": selected_start,
+        "selected_end": selected_end,
+        "previous_start": previous_start,
+        "previous_end": previous_end,
+        "selected_last_day": selected_end - timedelta(days=1),
+        "previous_last_day": previous_end - timedelta(days=1),
+        "selected_days": selected_days,
+        "previous_days": previous_days,
+        "equal_day_counts": selected_days == previous_days,
+        "current_month_cutoff_limited": (
+            is_current_month
+            and selected_end - timedelta(days=1) < reference_date
+        )
+    }
+
 def get_budget_recommendations(user_id, reference_date=None):
     """
     Builds explainable recommendations for current calendar budgets.
