@@ -2800,15 +2800,32 @@ def show_budget_spending(user_id, budget_id):
     Shows a popup listing all transactions that count
     toward the selected budget's progress.
     """
-    # Fetch the data using our helper
-    (transactions, total_spent, budget_limit,
-     budget_name, category, timeframe, window_start) = get_budget_transactions(
-        budget_id, user_id
+    # Use the same reference date for spending and period information.
+    today = datetime.today().date()
+
+    (
+        transactions,
+        total_spent,
+        budget_limit,
+        budget_name,
+        category,
+        timeframe,
+        window_start
+    ) = get_budget_transactions(
+        budget_id,
+        user_id,
+        reference_date=today
     )
 
     if not budget_name:
         messagebox.showerror("Error", "Budget not found.")
         return
+
+    period_start, period_end, days_remaining = get_budget_period(
+        timeframe,
+        reference_date=today
+    )
+    final_day = period_end - timedelta(days=1)
 
     sym      = get_currency(user_id)
     over     = max(total_spent - budget_limit, 0)
@@ -2823,18 +2840,24 @@ def show_budget_spending(user_id, budget_id):
     popup.configure(bg="#f0f4f8")
     popup.transient(root)
     popup.grab_set()
+    # Reserve the bottom controls before the expanding transaction list.
+    btn_bar = tk.Frame(popup, bg="#f0f4f8", pady=10)
+    btn_bar.pack(side="bottom", fill="x", padx=15)
 
     # ── Header ────────────────────────────────────────────────
     # Colour changes based on severity
-    if progress >= 100:
+    if total_spent > budget_limit:
         header_color = "#e53e3e"
-        status_text  = "EXCEEDED"
+        status_text = "BUDGET EXCEEDED"
+    elif total_spent == budget_limit:
+        header_color = "#dd6b20"
+        status_text = "LIMIT REACHED"
     elif progress >= 80:
         header_color = "#dd6b20"
-        status_text  = "APPROACHING LIMIT"
+        status_text = "APPROACHING LIMIT"
     else:
         header_color = "#276749"
-        status_text  = "ON TRACK"
+        status_text = "WITHIN LIMIT"
 
     header = tk.Frame(popup, bg=header_color, pady=10)
     header.pack(fill="x")
@@ -2848,10 +2871,19 @@ def show_budget_spending(user_id, budget_id):
 
     tk.Label(
         header,
-        text=f"{timeframe}  |  {category}  |  Since {window_start}",
+        text=(
+            f"{timeframe} | {category}\n"
+            f"{status_text}\n"
+            f"Calendar period: {period_start.isoformat()} "
+            f"→ {final_day.isoformat()}\n"
+            f"Recorded spending through: {today.isoformat()}"
+        ),
         font=("Segoe UI", 9),
-        bg=header_color, fg="white"
-    ).pack()
+        bg=header_color,
+        fg="white",
+        wraplength=460,
+        justify="center"
+    ).pack(padx=10)
 
     # ── Summary strip ─────────────────────────────────────────
     summary = tk.Frame(popup, bg="white", relief="solid", bd=1)
@@ -2876,7 +2908,13 @@ def show_budget_spending(user_id, budget_id):
     spent_col.pack(side="left", expand=True)
     tk.Label(spent_col, text="SPENT",
              font=("Segoe UI", 8), bg="white", fg="#718096").pack()
-    spent_color = "#e53e3e" if progress >= 100 else "#dd6b20" if progress >= 80 else "#276749"
+    spent_color = (
+        "#e53e3e"
+        if total_spent > budget_limit
+        else "#dd6b20"
+        if progress >= 80
+        else "#276749"
+    )
     tk.Label(spent_col, text=f"{sym}{total_spent:,.2f}",
              font=("Segoe UI", 11, "bold"), bg="white", fg=spent_color).pack()
 
@@ -2886,7 +2924,7 @@ def show_budget_spending(user_id, budget_id):
     # Over / Remaining column
     third_col = tk.Frame(summary_row, bg="white")
     third_col.pack(side="left", expand=True)
-    if progress >= 100:
+    if total_spent > budget_limit:
         tk.Label(third_col, text="OVER BY",
                  font=("Segoe UI", 8), bg="white", fg="#718096").pack()
         tk.Label(third_col, text=f"{sym}{over:,.2f}",
@@ -2897,12 +2935,16 @@ def show_budget_spending(user_id, budget_id):
         tk.Label(third_col, text=f"{sym}{remaining:,.2f}",
                  font=("Segoe UI", 11, "bold"), bg="white", fg="#276749").pack()
 
-    # ── Transaction count label ───────────────────────────────
+    # ── Usage and transaction count ──────────────────────────
     tk.Label(
         popup,
-        text=f"Transactions counted: {len(transactions)}",
+        text=(
+            f"Used: {progress:.1f}% | "
+            f"Transactions counted: {len(transactions)}"
+        ),
         font=("Segoe UI", 9, "italic"),
-        bg="#f0f4f8", fg="#718096"
+        bg="#f0f4f8",
+        fg="#718096"
     ).pack(anchor="w", padx=15, pady=(0, 4))
 
     # ── Scrollable transaction list ───────────────────────────
@@ -2994,7 +3036,7 @@ def show_budget_spending(user_id, budget_id):
             ).pack(side="right")
 
             # Necessity badge — only for expenses
-            if tx_necessity != "unset":
+            if tx_necessity in ("need", "want"):
                 nec_bg   = "#e9d8fd" if tx_necessity == "want" else "#c6f6d5"
                 nec_text = "🛍️ Want" if tx_necessity == "want" else "✅ Need"
                 tk.Label(
@@ -3027,8 +3069,6 @@ def show_budget_spending(user_id, budget_id):
             tk.Frame(tx_card, bg="white", height=4).pack()
 
     # ── Close button ──────────────────────────────────────────
-    btn_bar = tk.Frame(popup, bg="#f0f4f8", pady=10)
-    btn_bar.pack(fill="x", padx=15)
 
     def close_popup():
         # Remove the popup's global scrolling callback first.
