@@ -10531,358 +10531,278 @@ def check_and_award_badges(user_id):
 
 def check_budget_alerts(user_id):
     """
-    Checks all budgets and returns a list of alerts.
-    Now includes spent amount and overspend amount
-    so the popup can show real money figures.
+    Returns alerts for budgets at 80% usage or above.
+
+    Uses actual spending from the shared budget query.
+    Distinguishes an exactly reached limit from an exceeded limit.
     """
     budgets = view_budgets(user_id)
     alerts = []
+    today = datetime.today().date()
 
     for budget in budgets:
-        budget_id   = budget[0]
-        budget_name = budget[2]
-        timeframe   = budget[3]
-        amount      = budget[7]   # The budget limit
+        budget_id = budget[0]
 
-        progress = calculate_budget_progress(budget_id, user_id)
+        (
+            transactions,
+            spent,
+            limit,
+            name,
+            category,
+            timeframe,
+            window_start
+        ) = get_budget_transactions(
+            budget_id,
+            user_id,
+            reference_date=today
+        )
 
-        # Calculate actual spent amount from the percentage
-        # spent = (progress / 100) * limit
-        spent_amount = (progress / 100) * amount
+        # Invalid limits cannot support a meaningful usage percentage.
+        import math
+        if (
+            not name
+            or not math.isfinite(limit)
+            or limit <= 0
+            or not math.isfinite(spent)
+        ):
+            continue
 
-        # Calculate how much over the limit they are
-        # If not exceeded this will be 0 or negative
-        over_amount = spent_amount - amount
+        progress = (spent / limit) * 100
 
-        if progress >= 100:
-            alerts.append({
-                "name":         budget_name,
-                "timeframe":    timeframe,
-                "amount":       amount,       # The limit
-                "spent":        spent_amount, # How much spent
-                "over":         over_amount,  # How much over limit
-                "progress":     progress,
-                "severity":     "exceeded"
-            })
+        if spent > limit:
+            severity = "exceeded"
+        elif spent == limit:
+            severity = "at_limit"
         elif progress >= 80:
-            alerts.append({
-                "name":         budget_name,
-                "timeframe":    timeframe,
-                "amount":       amount,
-                "spent":        spent_amount,
-                "over":         over_amount,
-                "progress":     progress,
-                "severity":     "warning"
-            })
+            severity = "warning"
+        else:
+            continue
+
+        period_start, period_end, _ = get_budget_period(
+            timeframe,
+            reference_date=today
+        )
+
+        alerts.append({
+            "budget_id": budget_id,
+            "name": name,
+            "category": category,
+            "timeframe": timeframe,
+            "amount": limit,
+            "spent": spent,
+            "over": max(spent - limit, 0),
+            "remaining": max(limit - spent, 0),
+            "progress": progress,
+            "severity": severity,
+            "period_start": period_start.isoformat(),
+            "period_last_day": (
+                period_end - timedelta(days=1)
+            ).isoformat(),
+            "counted_through": today.isoformat()
+        })
 
     return alerts
 
 def show_budget_alert_popup(user_id, alerts):
     """
-    Shows a popup listing all budgets that need attention.
-    Now shows spent amount, limit, and overspend in
-    real money figures — not just percentages.
+    Displays calendar-based budget alerts.
+
+    Does not generate transactions or change balances.
     """
     if not alerts:
         return
 
     sym = get_currency(user_id)
+    has_exceeded = any(
+        alert["severity"] == "exceeded" for alert in alerts
+    )
 
-    # Create popup window
     popup = tk.Toplevel(root)
-    popup.title("⚠️ Budget Alert")
-    popup.geometry("500x520")
-    popup.resizable(False, False)
+    popup.title("Budget Alerts")
+    popup.geometry("560x600")
+    popup.minsize(460, 420)
     popup.configure(bg="#f0f4f8")
     popup.transient(root)
-    popup.grab_set()
 
-    # ── Header ──────────────────────────────────────────────
-    header_color = "#e53e3e" if any(
-        a["severity"] == "exceeded" for a in alerts
-    ) else "#dd6b20"
+    def close_popup():
+        # The existing scrollable-frame helper uses a global
+        # mouse-wheel binding. Clear it before destroying the canvas.
+        root.unbind_all("<MouseWheel>")
+        popup.destroy()
 
+    def on_view_budgets():
+        close_popup()
+        show_budgets(user_id)
+
+    popup.protocol("WM_DELETE_WINDOW", close_popup)
+
+    # Reserve footer space before creating the expanding scroll area.
+    footer = tk.Frame(popup, bg="#f0f4f8", pady=10)
+    footer.pack(side="bottom", fill="x", padx=15)
+
+    advice = (
+        "Recorded spending exceeds one or more limits. "
+        "Review the contributing transactions and your upcoming spending."
+        if has_exceeded else
+        "One or more budgets are near or at their limits. "
+        "Review upcoming spending before adding further expenses."
+    )
+
+    tk.Label(
+        footer,
+        text=advice,
+        font=("Segoe UI", 9, "italic"),
+        bg="#f0f4f8",
+        fg="#4a5568",
+        wraplength=500,
+        justify="left"
+    ).pack(anchor="w", pady=(0, 8))
+
+    button_row = tk.Frame(footer, bg="#f0f4f8")
+    button_row.pack()
+
+    make_button(
+        button_row,
+        "View Budgets",
+        on_view_budgets,
+        color="#3182ce",
+        width=16
+    ).pack(side="left", padx=5)
+
+    make_button(
+        button_row,
+        "Dismiss",
+        close_popup,
+        color="#718096",
+        width=12
+    ).pack(side="left", padx=5)
+
+    header_color = "#e53e3e" if has_exceeded else "#dd6b20"
     header = tk.Frame(popup, bg=header_color, pady=12)
     header.pack(fill="x")
 
     tk.Label(
         header,
-        text="⚠️ Budget Alert",
+        text="Budget Alerts",
         font=("Segoe UI", 15, "bold"),
-        fg="white", bg=header_color
+        bg=header_color,
+        fg="white"
     ).pack()
 
     tk.Label(
         header,
         text=f"{len(alerts)} budget(s) need your attention",
         font=("Segoe UI", 9),
-        fg="white", bg=header_color
+        bg=header_color,
+        fg="white"
     ).pack()
 
-    # ── Scrollable area for alert cards ─────────────────────
     alert_scroll = make_scrollable_frame(popup)
 
+    status_labels = {
+        "exceeded": "BUDGET EXCEEDED",
+        "at_limit": "LIMIT REACHED",
+        "warning": "APPROACHING LIMIT"
+    }
+
     for alert in alerts:
-        name      = alert["name"]
-        timeframe = alert["timeframe"]
-        amount    = alert["amount"]     # Budget limit
-        spent     = alert["spent"]      # Actual amount spent
-        over      = alert["over"]       # How much over limit
-        progress  = alert["progress"]
-        severity  = alert["severity"]
+        severity = alert["severity"]
+        exceeded = severity == "exceeded"
 
-        # ── Card colours based on severity ──────────────────
-        if severity == "exceeded":
-            card_bg      = "#fff5f5"
-            border_color = "#fc8181"
-            header_bg    = "#e53e3e"
-            icon         = "🔴"
-            status_text  = "BUDGET EXCEEDED"
-            status_color = "#e53e3e"
-        else:
-            card_bg      = "#fffbeb"
-            border_color = "#f6e05e"
-            header_bg    = "#dd6b20"
-            icon         = "🟡"
-            status_text  = "APPROACHING LIMIT"
-            status_color = "#dd6b20"
+        card_bg = "#fff5f5" if exceeded else "#fffbeb"
+        status_color = "#c53030" if exceeded else "#975a16"
 
-        # ── Outer card frame ─────────────────────────────────
         card = tk.Frame(
             alert_scroll,
             bg=card_bg,
-            relief="solid", bd=1,
-            highlightbackground=border_color,
-            highlightthickness=2
+            relief="solid",
+            bd=1
         )
         card.pack(fill="x", padx=15, pady=8)
 
-        # ── Card header strip ────────────────────────────────
-        # Coloured strip at top of card showing status
-        card_header = tk.Frame(card, bg=header_bg, pady=6)
-        card_header.pack(fill="x")
+        tk.Label(
+            card,
+            text=alert["name"],
+            font=("Segoe UI", 12, "bold"),
+            bg=card_bg,
+            fg="#2d3748",
+            wraplength=460,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(10, 2))
 
         tk.Label(
-            card_header,
-            text=f"{icon}  {name}  —  {status_text}",
-            font=("Segoe UI", 11, "bold"),
-            bg=header_bg, fg="white"
-        ).pack(anchor="w", padx=10)
+            card,
+            text=status_labels[severity],
+            font=("Segoe UI", 10, "bold"),
+            bg=card_bg,
+            fg=status_color
+        ).pack(anchor="w", padx=12, pady=(0, 6))
 
         tk.Label(
-            card_header,
-            text=f"Timeframe: {timeframe}",
+            card,
+            text=(
+                f"{alert['timeframe']} | {alert['category']}\n"
+                f"Calendar period: {alert['period_start']} "
+                f"→ {alert['period_last_day']}\n"
+                f"Recorded spending through: {alert['counted_through']}"
+            ),
             font=("Segoe UI", 9),
-            bg=header_bg, fg="white"
-        ).pack(anchor="w", padx=10)
+            bg=card_bg,
+            fg="#4a5568",
+            wraplength=460,
+            justify="left"
+        ).pack(anchor="w", padx=12)
 
-        # ── Money breakdown table ────────────────────────────
-        # This is the main improvement — shows real money figures
-        # in a clear table layout so user knows exactly where they stand
-        breakdown = tk.Frame(card, bg=card_bg)
-        breakdown.pack(fill="x", padx=15, pady=(10, 5))
-
-        # Row helper — creates one row of the breakdown table
-        def make_row(parent, label, value, bg,
-                     value_color="#2d3748", bold=False):
-            row = tk.Frame(parent, bg=bg)
-            row.pack(fill="x", pady=1)
-            tk.Label(
-                row,
-                text=label,
-                font=("Segoe UI", 10),
-                bg=bg, fg="#4a5568",
-                width=20, anchor="w"
-            ).pack(side="left")
-            tk.Label(
-                row,
-                text=value,
-                font=("Segoe UI", 10, "bold" if bold else "normal"),
-                bg=bg, fg=value_color
-            ).pack(side="left")
-
-        # Budget limit row
-        make_row(
-            breakdown,
-            "Budget limit:",
-            f"{sym}{amount:,.2f}",
-            card_bg
-        )
-
-        # Amount spent row — red if exceeded, orange if warning
-        spent_color = "#e53e3e" if severity == "exceeded" else "#dd6b20"
-        make_row(
-            breakdown,
-            "Amount spent:",
-            f"{sym}{spent:,.2f}",
-            card_bg,
-            value_color=spent_color,
-            bold=True
-        )
-
-        # Divider line between spent and over amount
-        ttk.Separator(breakdown, orient="horizontal").pack(
-            fill="x", pady=4
-        )
-
-        # Over by row — only show if actually exceeded
-        if severity == "exceeded":
-            make_row(
-                breakdown,
-                "⚠️  Over by:",
-                f"{sym}{over:,.2f}",
-                card_bg,
-                value_color="#e53e3e",
-                bold=True
+        values = [
+            ("Budget limit", alert["amount"]),
+            ("Recorded spending", alert["spent"]),
+            (
+                "Over by" if exceeded else "Remaining",
+                alert["over"] if exceeded else alert["remaining"]
             )
-        else:
-            # For warnings show how much is left before hitting limit
-            remaining = amount - spent
-            make_row(
-                breakdown,
-                "✅  Remaining:",
-                f"{sym}{remaining:,.2f}",
-                card_bg,
-                value_color="#38a169",
-                bold=True
-            )
+        ]
 
-        # ── Percentage label ─────────────────────────────────
-        pct_frame = tk.Frame(card, bg=card_bg)
-        pct_frame.pack(fill="x", padx=15, pady=(0, 5))
+        for label, value in values:
+            tk.Label(
+                card,
+                text=f"{label}: {sym}{value:,.2f}",
+                font=("Segoe UI", 10, "bold"),
+                bg=card_bg,
+                fg=status_color if label != "Budget limit" else "#2d3748"
+            ).pack(anchor="w", padx=12, pady=2)
+
         tk.Label(
-            pct_frame,
-            text=f"Used {progress:.1f}% of budget",
-            font=("Segoe UI", 9, "italic"),
-            bg=card_bg, fg="#718096"
-        ).pack(anchor="w")
+            card,
+            text=f"Used: {alert['progress']:.1f}%",
+            font=("Segoe UI", 9),
+            bg=card_bg,
+            fg="#4a5568"
+        ).pack(anchor="w", padx=12, pady=(6, 2))
 
-        # ── Progress bar ─────────────────────────────────────
-        # Improved version:
-        # Shows a marker line at 100% so user can see
-        # how far past the limit they are
-        bar_outer = tk.Frame(card, bg=card_bg)
-        bar_outer.pack(fill="x", padx=15, pady=(0, 10))
+        ttk.Progressbar(
+            card,
+            orient="horizontal",
+            mode="determinate",
+            maximum=100,
+            value=max(0, min(alert["progress"], 100))
+        ).pack(fill="x", padx=12, pady=(0, 4))
 
-        bar_canvas = tk.Canvas(
-            bar_outer,
-            width=430, height=20,
-            bg="#e2e8f0",
-            highlightthickness=0
-        )
-        bar_canvas.pack()
+        tk.Label(
+            card,
+            text=(
+                "Bar scale: 0–100%. "
+                "Overspending is shown in the figures above."
+            ),
+            font=("Segoe UI", 8, "italic"),
+            bg=card_bg,
+            fg="#718096",
+            wraplength=460,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 10))
 
-        if severity == "exceeded":
-            # For exceeded budgets:
-            # Show full red bar to represent 100% used
-            # Then show a darker red extension to show overspend
-            # The bar splits at the limit point
-
-            # Calculate where the limit line sits
-            # Limit line is always at full width (430px)
-            # because we show relative overspend
-            bar_canvas.create_rectangle(
-                0, 0, 430, 20,
-                fill="#fc8181",    # Light red = the base spend
-                outline=""
-            )
-
-            # Dark red fill from left showing proportion
-            # that is the "normal" spend up to limit
-            # This shows 100% of the bar in darker red
-            bar_canvas.create_rectangle(
-                0, 0, 430, 20,
-                fill="#e53e3e",    # Dark red = fully exceeded
-                outline=""
-            )
-
-            # Draw a white marker line at the budget limit position
-            # This visually shows WHERE the limit was
-            bar_canvas.create_line(
-                215, 0, 215, 20,   # Midpoint marker
-                fill="white",
-                width=3
-            )
-
-            # Add small labels inside the bar
-            bar_canvas.create_text(
-                105, 10,
-                text="LIMIT",
-                font=("Segoe UI", 7, "bold"),
-                fill="white"
-            )
-            bar_canvas.create_text(
-                320, 10,
-                text=f"OVER: {sym}{over:,.2f}",
-                font=("Segoe UI", 7, "bold"),
-                fill="white"
-            )
-
-        else:
-            # For warnings:
-            # Show normal fill bar with orange colour
-            # Fill width represents what percentage is used
-            fill_width = int((min(progress, 100) / 100) * 430)
-            bar_canvas.create_rectangle(
-                0, 0, fill_width, 20,
-                fill="#f6ad55",    # Orange for warning
-                outline=""
-            )
-
-            # Show remaining space in lighter colour
-            remaining_pct = 100 - progress
-            tk.Label(
-                bar_outer,
-                text=f"{remaining_pct:.1f}% remaining before limit",
-                font=("Segoe UI", 8),
-                bg=card_bg, fg="#718096"
-            ).pack(anchor="w", pady=(2, 0))
-
-    # ── Bottom advice message ────────────────────────────────
-    advice_frame = tk.Frame(popup, bg="#f0f4f8")
-    advice_frame.pack(fill="x", padx=15, pady=(5, 0))
-
-    has_exceeded = any(a["severity"] == "exceeded" for a in alerts)
-
-    if has_exceeded:
-        advice_text = (
-            "🔴 You have exceeded one or more budgets. "
-            "Review your spending and consider adjusting "
-            "your budget limits or reducing expenses."
-        )
-        advice_color = "#e53e3e"
-    else:
-        advice_text = (
-            "🟡 You are approaching your budget limits. "
-            "Be mindful of upcoming expenses to stay on track."
-        )
-        advice_color = "#dd6b20"
-
-    tk.Label(
-        advice_frame,
-        text=advice_text,
-        font=("Segoe UI", 9, "italic"),
-        bg="#f0f4f8", fg=advice_color,
-        wraplength=460, justify="left"
-    ).pack(anchor="w")
-
-    # ── Action buttons ───────────────────────────────────────
-    btn_frame = tk.Frame(popup, bg="#f0f4f8")
-    btn_frame.pack(pady=12)
-
-    def on_view_budgets():
-        popup.destroy()
-        show_budgets(user_id)
-
-    make_button(
-        btn_frame, "📊 View Budgets",
-        on_view_budgets, color="#3182ce"
-    ).pack(side="left", padx=5)
-
-    make_button(
-        btn_frame, "✖ Dismiss",
-        popup.destroy, color="#718096"
-    ).pack(side="left", padx=5)
+    # Wait until the popup is visible before taking the modal grab.
+    popup.wait_visibility()
+    popup.grab_set()
 
 # ============================================================
 # SETTINGS SCREEN
