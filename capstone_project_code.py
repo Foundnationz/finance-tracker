@@ -11010,6 +11010,232 @@ def render_category_spending_recommendations(
         justify="left"
     ).pack(anchor="w", padx=12, pady=(6, 12))
 
+def render_upcoming_expense_recommendations(
+    parent,
+    user_id,
+    reference_date=None
+):
+    """
+    Displays upcoming expense guidance for seven calendar days.
+
+    Independent of the selected Dashboard report month.
+    Reads data only.
+    """
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    section = tk.Frame(
+        parent,
+        bg="#faf5ff",
+        relief="solid",
+        bd=1
+    )
+    section.pack(fill="x", pady=10)
+
+    tk.Label(
+        section,
+        text="Upcoming Scheduled Expenses",
+        font=("Segoe UI", 12, "bold"),
+        bg="#faf5ff",
+        fg="#553c9a"
+    ).pack(anchor="w", padx=12, pady=(10, 4))
+
+    try:
+        result = get_upcoming_expense_recommendations(
+            user_id,
+            reference_date=reference_date
+        )
+    except (sqlite3.Error, ValueError, OverflowError) as error:
+        tk.Label(
+            section,
+            text=f"Upcoming expenses could not be calculated: {error}",
+            font=("Segoe UI", 9),
+            bg="#faf5ff",
+            fg="#c53030",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+        return
+
+    sym = get_currency(user_id)
+
+    tk.Label(
+        section,
+        text=(
+            f"{result['window_start']} → {result['window_last_day']}\n"
+            "Seven calendar days, including today. "
+            "Independent of the report month selected above."
+        ),
+        font=("Segoe UI", 9),
+        bg="#faf5ff",
+        fg="#4a5568",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    if result["notices"]:
+        notice_frame = tk.Frame(section, bg="#fffbeb")
+        notice_frame.pack(fill="x", padx=12, pady=(0, 8))
+
+        tk.Label(
+            notice_frame,
+            text="Schedule and data notices",
+            font=("Segoe UI", 9, "bold"),
+            bg="#fffbeb",
+            fg="#975a16"
+        ).pack(anchor="w", padx=8, pady=(6, 2))
+
+        for notice in result["notices"]:
+            tk.Label(
+                notice_frame,
+                text=f"• {notice}",
+                font=("Segoe UI", 9),
+                bg="#fffbeb",
+                fg="#975a16",
+                wraplength=560,
+                justify="left"
+            ).pack(anchor="w", padx=8, pady=(0, 5))
+
+    if not result["accounts"]:
+        tk.Label(
+            section,
+            text=(
+                "No unprocessed scheduled expense occurrences were found "
+                "in this window among the schedules that could be evaluated. "
+                "This does not mean there will be no expenses."
+            ),
+            font=("Segoe UI", 10),
+            bg="#faf5ff",
+            fg="#4a5568",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 10))
+
+    for account in result["accounts"]:
+        card = tk.Frame(section, bg="white", relief="solid", bd=1)
+        card.pack(fill="x", padx=12, pady=5)
+
+        exceeds_balance = (
+            account["scheduled_total"] > account["recorded_balance"]
+        )
+        emphasis_color = "#c53030" if exceeds_balance else "#553c9a"
+
+        balance = account["recorded_balance"]
+        balance_text = (
+            f"{'-' if balance < 0 else ''}{sym}{abs(balance):,.2f}"
+        )
+
+        tk.Label(
+            card,
+            text=account["account_name"],
+            font=("Segoe UI", 11, "bold"),
+            bg="white",
+            fg="#2d3748",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(10, 4))
+
+        tk.Label(
+            card,
+            text=(
+                f"Current recorded balance: {balance_text}\n"
+                f"Scheduled expenses in this window: "
+                f"{sym}{account['scheduled_total']:,.2f}"
+            ),
+            font=("Segoe UI", 10),
+            bg="white",
+            fg="#4a5568",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10)
+
+        if exceeds_balance:
+            tk.Label(
+                card,
+                text=(
+                    "Scheduled expenses exceed the current recorded "
+                    f"balance by "
+                    f"{sym}{account['excess_over_recorded_balance']:,.2f}."
+                ),
+                font=("Segoe UI", 10, "bold"),
+                bg="white",
+                fg=emphasis_color,
+                wraplength=570,
+                justify="left"
+            ).pack(anchor="w", padx=10, pady=(6, 2))
+
+        tk.Label(
+            card,
+            text=account["suggestion"],
+            font=("Segoe UI", 9),
+            bg="white",
+            fg=emphasis_color,
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(4, 8))
+
+        # Keep the Dashboard compact. Totals still include every
+        # occurrence, even if only the first five are listed here.
+        visible_occurrences = account["occurrences"][:5]
+
+        for occurrence in visible_occurrences:
+            kind = (
+                "Subscription"
+                if occurrence["schedule_kind"] == "subscription"
+                else "Recurring expense"
+            )
+
+            tk.Label(
+                card,
+                text=(
+                    f"{occurrence['scheduled_date']} | "
+                    f"{occurrence['name']} | "
+                    f"{sym}{occurrence['amount']:,.2f}\n"
+                    f"{kind}"
+                ),
+                font=("Segoe UI", 9),
+                bg="white",
+                fg="#4a5568",
+                wraplength=570,
+                justify="left"
+            ).pack(anchor="w", padx=10, pady=(0, 6))
+
+        hidden_count = (
+            len(account["occurrences"]) - len(visible_occurrences)
+        )
+
+        if hidden_count > 0:
+            tk.Label(
+                card,
+                text=(
+                    f"{hidden_count} additional occurrence(s) are "
+                    "included in the total but not listed here."
+                ),
+                font=("Segoe UI", 8, "italic"),
+                bg="white",
+                fg="#718096",
+                wraplength=570,
+                justify="left"
+            ).pack(anchor="w", padx=10, pady=(0, 8))
+
+    tk.Label(
+        section,
+        text=result["limitation"],
+        font=("Segoe UI", 8, "italic"),
+        bg="#faf5ff",
+        fg="#718096",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(6, 8))
+
+    make_button(
+        section,
+        "View All Schedules",
+        lambda: show_recurring_transactions(user_id),
+        color="#805ad5",
+        width=20
+    ).pack(anchor="w", padx=12, pady=(0, 12))
+
 # ============================================================
 # DASHBOARD SCREEN
 # ============================================================
@@ -11082,10 +11308,19 @@ def show_dashboard(user_id):
         for widget in insights_frame.winfo_children():
             widget.destroy()
 
+        # Both current-guidance sections use the same reference date.
+        today = datetime.today().date()
+
         render_budget_recommendations(
             insights_frame,
             user_id,
-            reference_date=datetime.today().date()
+            reference_date=today
+        )
+
+        render_upcoming_expense_recommendations(
+            insights_frame,
+            user_id,
+            reference_date=today
         )
 
     # Show current guidance when the Dashboard first opens.
