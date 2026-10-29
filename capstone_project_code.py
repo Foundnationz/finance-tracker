@@ -2094,59 +2094,84 @@ def show_budgets(user_id):
 
     # ── Budget cards ─────────────────────────────────────────
     for budget in budgets:
-        # Unpack all budget fields
-        budget_id   = budget[0]
+        budget_id = budget[0]
         budget_name = budget[2]
-        timeframe   = budget[3]
-        start_date  = budget[4]
-        end_date    = budget[5]
-        category    = budget[6]
-        amount      = budget[7]   
-        notes       = budget[9] or ""# The budget limit
+        timeframe = budget[3]
+        category = budget[6]
+        amount = budget[7]
+        notes = budget[9] or ""
 
-        # Get progress (now uncapped — can exceed 100)
-        progress = calculate_budget_progress(budget_id, user_id)
+        # Use one reference date for this card's period and spending.
+        today = datetime.today().date()
 
-        # Calculate real money figures
-        spent_amount = (progress / 100) * amount
-        over_amount  = max(spent_amount - amount, 0)
-        remaining    = max(amount - spent_amount, 0)
+        period_start, period_end, days_left = get_budget_period(
+            timeframe,
+            reference_date=today
+        )
 
-        # Calculate days remaining in budget period
-        today    = datetime.today().date()
-        try:
-            end_dt   = datetime.strptime(end_date, "%Y-%m-%d").date()
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
-            days_left  = (end_dt - today).days
-            total_days = (end_dt - start_dt).days
-        except ValueError:
-            days_left  = 0
-            total_days = 0
+        # period_end is exclusive. Display the last included day.
+        display_end = period_end - timedelta(days=1)
 
-        # Determine severity for colour coding
-        if progress >= 100:
-            severity     = "exceeded"
-            header_bg    = "#e53e3e"   # Red
-            card_bg      = "#fff5f5"   # Light red
+        # Read the actual spending total rather than reconstructing
+        # it from a percentage.
+        (
+            transactions,
+            spent_amount,
+            budget_limit,
+            fetched_budget_name,
+            fetched_category,
+            fetched_timeframe,
+            window_start
+        ) = get_budget_transactions(
+            budget_id,
+            user_id,
+            reference_date=today
+        )
+
+        progress = (
+            (spent_amount / amount) * 100
+            if amount > 0
+            else 0
+        )
+
+        over_amount = max(spent_amount - amount, 0)
+        remaining = max(amount - spent_amount, 0)
+
+        # Determine severity from the actual monetary amounts.
+        if spent_amount > amount:
+            severity = "exceeded"
+            header_bg = "#e53e3e"
+            card_bg = "#fff5f5"
             border_color = "#fc8181"
-            status_icon  = "🔴"
-            status_text  = "EXCEEDED"
+            status_icon = "🔴"
+            status_text = "EXCEEDED"
             status_color = "#e53e3e"
-        elif progress >= 80:
-            severity     = "warning"
-            header_bg    = "#dd6b20"   # Orange
-            card_bg      = "#fffbeb"   # Light orange
+
+        elif spent_amount == amount:
+            severity = "at_limit"
+            header_bg = "#dd6b20"
+            card_bg = "#fffbeb"
             border_color = "#f6ad55"
-            status_icon  = "🟡"
-            status_text  = "APPROACHING LIMIT"
+            status_icon = "🟡"
+            status_text = "LIMIT REACHED"
             status_color = "#dd6b20"
+
+        elif progress >= 80:
+            severity = "warning"
+            header_bg = "#dd6b20"
+            card_bg = "#fffbeb"
+            border_color = "#f6ad55"
+            status_icon = "🟡"
+            status_text = "APPROACHING LIMIT"
+            status_color = "#dd6b20"
+
         else:
-            severity     = "ok"
-            header_bg    = "#276749"   # Green
-            card_bg      = "#f0fff4"   # Light green
+            severity = "ok"
+            header_bg = "#276749"
+            card_bg = "#f0fff4"
             border_color = "#68d391"
-            status_icon  = "🟢"
-            status_text  = "ON TRACK"
+            status_icon = "🟢"
+            status_text = "WITHIN LIMIT"
             status_color = "#276749"
 
         # ── Outer card ───────────────────────────────────────
@@ -2289,16 +2314,13 @@ def show_budgets(user_id):
             bg=card_bg, fg=status_color
         ).pack(side="left")
 
-        # Right label — days remaining
-        if days_left > 0:
-            days_text  = f"⏰ {days_left} day(s) left"
-            days_color = "#276749" if days_left > 7 else "#dd6b20"
-        elif days_left == 0:
-            days_text  = "⏰ Last day!"
-            days_color = "#e53e3e"
+        # Includes today because spending may still occur today.
+        if days_left == 1:
+            days_text = "Last day — includes today"
         else:
-            days_text  = "⏰ Period ended"
-            days_color = "#718096"
+            days_text = f"{days_left} days left — includes today"
+
+        days_color = "#718096"
 
         tk.Label(
             bar_info,
@@ -2307,101 +2329,31 @@ def show_budgets(user_id):
             bg=card_bg, fg=days_color
         ).pack(side="right")
 
-        # The progress bar canvas
-        bar_canvas = tk.Canvas(
+        # A conventional usage bar:
+        # full width represents 100% of the budget.
+        # Actual usage above 100% is shown by the percentage and
+        # "Over by" amount, not by a misleading midpoint marker.
+        usage_bar = ttk.Progressbar(
             breakdown,
-            width=430, height=22,
-            bg="#e2e8f0",
-            highlightthickness=0
+            orient="horizontal",
+            mode="determinate",
+            maximum=100,
+            value=max(0, min(progress, 100))
         )
-        bar_canvas.pack(fill="x", pady=(4, 0))
+        usage_bar.pack(fill="x", pady=(4, 0))
 
-        if severity == "exceeded":
-            # Exceeded bar:
-            # Split bar — left half shows "limit" zone in medium red
-            # Right half shows "overspend" zone in dark red
-            # White line in middle marks the budget limit point
-
-            # Calculate where the limit sits proportionally
-            # If progress = 715%, then limit is at 100/715 = 14% of the way
-            # But we show it at the midpoint for clarity
-            limit_x = 215   # Always show limit at midpoint
-
-            # Left zone — "normal spend" up to limit
-            bar_canvas.create_rectangle(
-                0, 0, limit_x, 22,
-                fill="#fc8181",   # Light red
-                outline=""
-            )
-
-            # Right zone — overspend beyond limit
-            bar_canvas.create_rectangle(
-                limit_x, 0, 430, 22,
-                fill="#e53e3e",   # Dark red
-                outline=""
-            )
-
-            # White divider line at limit point
-            bar_canvas.create_line(
-                limit_x, 0, limit_x, 22,
-                fill="white", width=3
-            )
-
-            # Text labels inside the bar zones
-            bar_canvas.create_text(
-                limit_x // 2, 11,
-                text=f"Limit: {sym}{amount:,.2f}",
-                font=("Segoe UI", 8, "bold"),
-                fill="white"
-            )
-            bar_canvas.create_text(
-                limit_x + (430 - limit_x) // 2, 11,
-                text=f"Over: {sym}{over_amount:,.2f}",
-                font=("Segoe UI", 8, "bold"),
-                fill="white"
-            )
-
-        elif severity == "warning":
-            # Warning bar — orange fill showing how much used
-            fill_width = int((min(progress, 100) / 100) * 430)
-            bar_canvas.create_rectangle(
-                0, 0, fill_width, 22,
-                fill="#f6ad55",   # Orange
-                outline=""
-            )
-            # Show remaining space in lighter shade
-            bar_canvas.create_rectangle(
-                fill_width, 0, 430, 22,
-                fill="#feebc8",   # Light orange
-                outline=""
-            )
-            bar_canvas.create_text(
-                fill_width // 2 if fill_width > 60 else 80, 11,
-                text=f"{progress:.1f}% used",
-                font=("Segoe UI", 8, "bold"),
-                fill="white"
-            )
-
-        else:
-            # OK bar — green fill
-            fill_width = int((progress / 100) * 430)
-            bar_canvas.create_rectangle(
-                0, 0, fill_width, 22,
-                fill="#48bb78",   # Green
-                outline=""
-            )
-            bar_canvas.create_rectangle(
-                fill_width, 0, 430, 22,
-                fill="#c6f6d5",   # Light green
-                outline=""
-            )
-            if fill_width > 60:
-                bar_canvas.create_text(
-                    fill_width // 2, 11,
-                    text=f"{progress:.1f}% used",
-                    font=("Segoe UI", 8, "bold"),
-                    fill="white"
-                )
+        tk.Label(
+            breakdown,
+            text=(
+                "Bar scale: 0–100% of the budget. "
+                "Any overspend is shown in the amounts above."
+            ),
+            font=("Segoe UI", 8),
+            bg=card_bg,
+            fg="#718096",
+            wraplength=500,
+            justify="left"
+        ).pack(anchor="w", pady=(3, 0))
 
         # ── Date info row ─────────────────────────────────────
         date_row = tk.Frame(card, bg=card_bg)
@@ -2409,10 +2361,30 @@ def show_budgets(user_id):
 
         tk.Label(
             date_row,
-            text=f"📅 Period: {start_date}  →  {end_date}",
+            text=(
+                f"Calendar period: {period_start.isoformat()} "
+                f"→ {display_end.isoformat()}\n"
+                f"Recorded spending counted through: {today.isoformat()}"
+            ),
             font=("Segoe UI", 8, "italic"),
-            bg=card_bg, fg="#718096"
-        ).pack(side="left")
+            bg=card_bg,
+            fg="#718096",
+            justify="left"
+        ).pack(anchor="w")
+
+        tk.Label(
+            card,
+            text=(
+                "The limit applies to the whole calendar period, including "
+                "expenses recorded before this budget was created. "
+                "It is not automatically prorated."
+            ),
+            font=("Segoe UI", 8, "italic"),
+            bg=card_bg,
+            fg="#718096",
+            wraplength=550,
+            justify="left"
+        ).pack(anchor="w", padx=15, pady=(0, 6))
 
         # Display budget notes only if the user entered notes
         if notes:
