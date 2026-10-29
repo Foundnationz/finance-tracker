@@ -3442,6 +3442,136 @@ def get_subscription_cost_review(user_id, reference_date=None):
         )
     }
 
+def get_needs_wants_reflection(
+    user_id,
+    selected_year,
+    selected_month,
+    reference_date=None
+):
+    """
+    Summarises recorded expenses by Need/Want classification
+    for the selected report month.
+
+    Rules:
+    - Compares expenses only.
+    - Treats 'unset' as unclassified, never as a Want.
+    - For the current month, counts through today.
+    - Reads data only.
+    """
+    import math
+    from datetime import date
+    from decimal import Decimal
+
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    period_start = date(selected_year, selected_month, 1)
+    current_month_start = reference_date.replace(day=1)
+
+    if period_start > current_month_start:
+        raise ValueError(
+            "Needs/Wants reflection is not available for future months."
+        )
+
+    month_end = period_start + relativedelta(months=1)
+
+    # For the current month, count only through today.
+    if period_start == current_month_start:
+        spending_end = min(
+            month_end,
+            reference_date + timedelta(days=1)
+        )
+        counted_through = (spending_end - timedelta(days=1)).isoformat()
+    else:
+        spending_end = month_end
+        counted_through = (month_end - timedelta(days=1)).isoformat()
+
+    totals = {
+        "need": Decimal("0"),
+        "want": Decimal("0"),
+        "unclassified": Decimal("0")
+    }
+
+    invalid_amount_count = 0
+
+    with get_db() as conn:
+        rows = conn.execute(
+            '''SELECT amount, necessity
+               FROM transactions
+               WHERE user_id = ?
+                 AND type = 'expense'
+                 AND date >= ?
+                 AND date < ?''',
+            (
+                user_id,
+                period_start.isoformat(),
+                spending_end.isoformat()
+            )
+        ).fetchall()
+
+    for amount, necessity in rows:
+        try:
+            numeric = float(amount)
+
+            if not math.isfinite(numeric) or numeric < 0:
+                raise ValueError
+
+            value = Decimal(str(amount))
+
+        except (TypeError, ValueError, OverflowError):
+            invalid_amount_count += 1
+            continue
+
+        if necessity == "need":
+            totals["need"] += value
+        elif necessity == "want":
+            totals["want"] += value
+        else:
+            # Includes 'unset', NULL, or any unexpected value.
+            totals["unclassified"] += value
+
+    need_total = float(totals["need"])
+    want_total = float(totals["want"])
+    unclassified_total = float(totals["unclassified"])
+
+    total_expenses = need_total + want_total + unclassified_total
+    classified_total = need_total + want_total
+
+    # Percentages of classified spending only.
+    if classified_total > 0:
+        need_percent = (need_total / classified_total) * 100
+        want_percent = (want_total / classified_total) * 100
+    else:
+        need_percent = None
+        want_percent = None
+
+    return {
+        "selected_year": selected_year,
+        "selected_month": selected_month,
+        "period_start": period_start.isoformat(),
+        "period_last_day": (month_end - timedelta(days=1)).isoformat(),
+        "counted_through": counted_through,
+        "is_current_month": period_start == current_month_start,
+        "need_total": need_total,
+        "want_total": want_total,
+        "unclassified_total": unclassified_total,
+        "classified_total": classified_total,
+        "total_expenses": total_expenses,
+        "need_percent_of_classified": need_percent,
+        "want_percent_of_classified": want_percent,
+        "invalid_amount_count": invalid_amount_count,
+        "suggestion": (
+            "If you want to free up money for savings or goals, "
+            "the Want expenses are usually the easiest to review first."
+        ),
+        "limitation": (
+            "Covers recorded expenses only, by their Need/Want labels. "
+            "Unclassified expenses are shown separately and are not "
+            "counted as Wants. This is not a full 50/30/20 assessment, "
+            "which also considers income, savings, and debt."
+        )
+    }
+
 def get_budget_recommendations(user_id, reference_date=None):
     """
     Builds explainable recommendations for current calendar budgets.
