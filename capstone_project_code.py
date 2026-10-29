@@ -2795,6 +2795,148 @@ def calculate_budget_progress(budget_id, user_id, reference_date=None):
 
     return (total_spent / budget_limit) * 100
 
+def get_budget_recommendations(user_id, reference_date=None):
+    """
+    Builds explainable recommendations for current calendar budgets.
+
+    Reads data only:
+    - Does not create transactions
+    - Does not change balances or budget limits
+    - Does not reserve money
+
+    Returns a list of dictionaries for later Dashboard display.
+    """
+    import math
+    from decimal import Decimal, ROUND_DOWN
+
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    recommendations = []
+
+    for budget in view_budgets(user_id):
+        budget_id = budget[0]
+
+        (
+            transactions,
+            spent,
+            limit,
+            name,
+            category,
+            timeframe,
+            window_start
+        ) = get_budget_transactions(
+            budget_id,
+            user_id,
+            reference_date=reference_date
+        )
+
+        if not name:
+            continue
+
+        # Avoid generating misleading advice from invalid stored amounts.
+        if (
+            not math.isfinite(limit)
+            or limit <= 0
+            or not math.isfinite(spent)
+            or spent < 0
+        ):
+            continue
+
+        period_start, period_end, days_remaining = get_budget_period(
+            timeframe,
+            reference_date=reference_date
+        )
+
+        remaining = max(limit - spent, 0)
+        over = max(spent - limit, 0)
+        daily_allowance = None
+
+        if spent > limit:
+            severity = "exceeded"
+            title = f"{name}: review spending above the limit"
+            suggestion = (
+                "Review the transactions counted toward this budget "
+                "and consider reducing further spending in this scope."
+            )
+
+        elif spent == limit:
+            severity = "at_limit"
+            title = f"{name}: budget limit reached"
+            suggestion = (
+                "There is no remaining allowance under this budget. "
+                "Review upcoming expenses before recording further spending "
+                "in this scope."
+            )
+
+        else:
+            severity = "allowance"
+            title = f"{name}: remaining daily allowance"
+
+            # Round down to two decimal places so the displayed daily
+            # amount does not round above the remaining allowance.
+            daily_allowance = float(
+                (
+                    Decimal(str(remaining))
+                    / Decimal(days_remaining)
+                ).quantize(
+                    Decimal("0.01"),
+                    rounding=ROUND_DOWN
+                )
+            )
+
+            suggestion = (
+                "Consider keeping average daily spending within the "
+                "calculated allowance for the rest of this calendar period."
+            )
+
+        recommendations.append({
+            "kind": "budget",
+            "budget_id": budget_id,
+            "title": title,
+            "severity": severity,
+            "name": name,
+            "category": category,
+            "timeframe": timeframe,
+            "period_start": period_start.isoformat(),
+            "period_last_day": (
+                period_end - timedelta(days=1)
+            ).isoformat(),
+            "counted_through": reference_date.isoformat(),
+            "limit": limit,
+            "spent": spent,
+            "remaining": remaining,
+            "over": over,
+            "days_remaining": days_remaining,
+            "daily_allowance": daily_allowance,
+            "transaction_count": len(transactions),
+            "suggestion": suggestion,
+            "limitation": (
+                "Based on recorded expenses and the current budget limit. "
+                "This is not an affordability assessment or a guarantee "
+                "that upcoming expenses can be covered. Overlapping budgets "
+                "are separate views of spending; do not add their daily "
+                "allowances together."
+            )
+        })
+
+    # Show exceeded budgets first, followed by reached limits.
+    priority = {
+        "exceeded": 0,
+        "at_limit": 1,
+        "allowance": 2
+    }
+
+    recommendations.sort(
+        key=lambda item: (
+            priority[item["severity"]],
+            item["name"].casefold(),
+            item["budget_id"]
+        )
+    )
+
+    return recommendations
+
 def show_budget_spending(user_id, budget_id):
     """
     Shows a popup listing all transactions that count
