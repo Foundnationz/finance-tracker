@@ -3015,6 +3015,257 @@ def get_category_spending_recommendations(
         "invalid_amount_count": invalid_amount_count
     }
 
+def get_upcoming_expense_recommendations(user_id, reference_date=None):
+    """
+    Reads active expense schedules for a seven-day window.
+
+    Window:
+        reference_date through reference_date + 6 days, inclusive.
+
+    Does not:
+        - Generate transactions
+        - Change next-due dates
+        - Change account balances
+        - Include scheduled income
+
+    Returns account summaries, individual scheduled occurrences,
+    and notices about incomplete or invalid schedule data.
+    """
+    import math
+
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    window_end = reference_date + timedelta(days=7)
+
+    account_summaries = {}
+    notices = []
+
+    with get_db() as conn:
+        # Read schedules and occurrence markers from one snapshot.
+        conn.execute("BEGIN")
+
+        rules = conn.execute(
+            '''SELECT r.id, r.name, r.account_id, r.amount,
+                      r.frequency, r.next_due_date, r.schedule_kind,
+                      r.monthly_charge_days, r.schedule_start_date,
+                      a.id, a.account_name, a.balance
+               FROM recurring_transactions r
+               LEFT JOIN accounts a
+                 ON a.id = r.account_id AND a.user_id = r.user_id
+               WHERE r.user_id = ?
+                 AND r.is_active = 1
+                 AND r.type = 'expense'
+               ORDER BY r.id''',
+            (user_id,)
+        ).fetchall()
+
+        processed = set(
+            conn.execute(
+                '''SELECT recurring_rule_id, scheduled_date
+                   FROM processed_schedule_occurrences
+                   WHERE user_id = ?
+                     AND scheduled_date >= ?
+                     AND scheduled_date < ?''',
+                (
+                    user_id,
+                    reference_date.isoformat(),
+                    window_end.isoformat()
+                )
+            ).fetchall()
+        )
+
+        linked_subscription_rules = {
+            row[0]
+            for row in conn.execute(
+                '''SELECT recurring_rule_id
+                   FROM subscriptions
+                   WHERE user_id = ?
+                     AND recurring_rule_id IS NOT NULL''',
+                (user_id,)
+            ).fetchall()
+        }
+
+        unlinked_count = conn.execute(
+            '''SELECT COUNT(*)
+               FROM subscriptions
+               WHERE user_id = ? AND recurring_rule_id IS NULL''',
+            (user_id,)
+        ).fetchone()[0]
+
+    if unlinked_count:
+        notices.append(
+            f"{unlinked_count} subscription(s) still need schedule setup "
+            "and are excluded."
+        )
+
+    for rule in rules:
+        (
+            rule_id, name, account_id, stored_amount,
+            frequency, next_due_text, schedule_kind,
+            billing_days, start_date_text,
+            found_account_id, account_name, stored_balance
+        ) = rule
+
+        if found_account_id is None:
+            notices.append(
+                f"'{name}' was excluded because its account is missing."
+            )
+            continue
+
+        try:
+            amount = float(stored_amount)
+            balance = float(stored_balance)
+
+            if (
+                not math.isfinite(amount)
+                or amount <= 0
+                or not math.isfinite(balance)
+            ):
+                raise ValueError("Invalid amount or account balance.")
+
+            due = datetime.strptime(
+                next_due_text, "%Y-%m-%d"
+            ).date()
+
+            if schedule_kind == "subscription":
+                if rule_id not in linked_subscription_rules:
+                    raise ValueError("Missing linked subscription record.")
+
+                start_date = datetime.strptime(
+                    start_date_text, "%Y-%m-%d"
+                ).date()
+
+                due = next_subscription_billing_date(
+                    billing_days,
+                    max(due, start_date),
+                    inclusive=True
+                )
+
+            elif schedule_kind != "recurring":
+                raise ValueError("Unrecognised schedule type.")
+
+            # Validate advancement even if the next date is outside
+            # the requested window.
+            advance_schedule_date(
+                due, schedule_kind, frequency, billing_days
+            )
+
+            has_overdue_dates = due < reference_date
+            iterations = 0
+            occurrences = []
+
+            # Advance using exactly the same date helper as the processor.
+            # This preserves the processor's existing monthly behavior.
+            while due < window_end:
+                iterations += 1
+
+                if iterations > 10000:
+                    raise ValueError(
+                        "Too many dates to inspect; review this schedule."
+                    )
+
+                if (
+                    due >= reference_date
+                    and (rule_id, due.isoformat()) not in processed
+                ):
+                    occurrences.append({
+                        "rule_id": rule_id,
+                        "name": name,
+                        "scheduled_date": due.isoformat(),
+                        "amount": amount,
+                        "schedule_kind": schedule_kind
+                    })
+
+                following_due = advance_schedule_date(
+                    due, schedule_kind, frequency, billing_days
+                )
+
+                if following_due <= due:
+                    raise ValueError("Schedule dates did not advance.")
+
+                due = following_due
+
+        except (TypeError, ValueError, OverflowError) as error:
+            notices.append(
+                f"'{name}' was excluded: {error}"
+            )
+            continue
+
+        if has_overdue_dates:
+            notices.append(
+                f"'{name}' has pending schedule dates before this window. "
+                "Those dates are excluded from the upcoming total; "
+                "account balances may not yet reflect their processing."
+            )
+
+        if not occurrences:
+            continue
+
+        if account_id not in account_summaries:
+            account_summaries[account_id] = {
+                "account_id": account_id,
+                "account_name": account_name,
+                "recorded_balance": balance,
+                "scheduled_total": 0,
+                "occurrences": []
+            }
+
+        summary = account_summaries[account_id]
+        summary["occurrences"].extend(occurrences)
+
+    for summary in account_summaries.values():
+        summary["occurrences"].sort(
+            key=lambda item: (
+                item["scheduled_date"],
+                item["name"].casefold(),
+                item["rule_id"]
+            )
+        )
+
+        summary["scheduled_total"] = sum(
+            item["amount"] for item in summary["occurrences"]
+        )
+
+        summary["excess_over_recorded_balance"] = max(
+            summary["scheduled_total"] - summary["recorded_balance"],
+            0
+        )
+
+        summary["suggestion"] = (
+            "Review this account before the scheduled dates. "
+            "Scheduled expenses exceed its current recorded balance."
+            if summary["scheduled_total"] > summary["recorded_balance"]
+            else
+            "Review these upcoming commitments before planning "
+            "additional spending. A sufficient recorded balance does "
+            "not establish affordability."
+        )
+
+    accounts = sorted(
+        account_summaries.values(),
+        key=lambda item: (
+            -item["excess_over_recorded_balance"],
+            item["account_name"].casefold(),
+            item["account_id"]
+        )
+    )
+
+    return {
+        "window_start": reference_date.isoformat(),
+        "window_last_day": (
+            window_end - timedelta(days=1)
+        ).isoformat(),
+        "accounts": accounts,
+        "notices": notices,
+        "limitation": (
+            "Based on active expense schedules and recorded account "
+            "balances. Excludes scheduled income, pending dates before "
+            "the window, unrecorded activity, and other future changes. "
+            "This is not a complete cash-flow forecast."
+        )
+    }
+
 def get_budget_recommendations(user_id, reference_date=None):
     """
     Builds explainable recommendations for current calendar budgets.
