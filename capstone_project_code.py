@@ -3188,6 +3188,47 @@ def show_add_budget(user_id):
                                 state="readonly", width=28)
     timeframe_dd.pack(anchor="w", pady=(2, 10))
 
+    # Show the period before the user enters a budget limit.
+    period_info = tk.Label(
+        body,
+        text="",
+        font=("Segoe UI", 9),
+        bg="#ebf8ff",
+        fg="#2c5282",
+        wraplength=500,
+        justify="left",
+        padx=10,
+        pady=8
+    )
+    period_info.pack(anchor="w", pady=(0, 10))
+
+    def update_budget_period_preview(*args):
+        try:
+            period_start, period_end, days_remaining = get_budget_period(
+                timeframe_var.get()
+            )
+
+            # The helper returns an exclusive end.
+            # Show the final included day to the user.
+            final_day = period_end - timedelta(days=1)
+
+            period_info.config(
+                text=(
+                    f"Current calendar period: "
+                    f"{period_start.strftime('%d %b %Y')} – "
+                    f"{final_day.strftime('%d %b %Y')}\n"
+                    f"Days remaining, including today: {days_remaining}\n\n"
+                    "Includes expenses already recorded in this period. "
+                    "The limit applies to the whole period and is not "
+                    "automatically prorated."
+                )
+            )
+        except ValueError as error:
+            period_info.config(text=str(error))
+
+    timeframe_var.trace_add("write", update_budget_period_preview)
+    update_budget_period_preview()
+
     # Amount
     sym = get_currency(user_id)
 
