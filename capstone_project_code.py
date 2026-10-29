@@ -3266,6 +3266,182 @@ def get_upcoming_expense_recommendations(user_id, reference_date=None):
         )
     }
 
+def get_subscription_cost_review(user_id, reference_date=None):
+    """
+    Estimates unprocessed subscription expenses scheduled for
+    the next calendar month, using current schedule settings.
+
+    Reads data only. Does not process payments or change balances.
+    """
+    import math
+
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    month_start = (
+        reference_date.replace(day=1) + relativedelta(months=1)
+    )
+    month_end = month_start + relativedelta(months=1)
+
+    notices = []
+    subscriptions = []
+
+    with get_db() as conn:
+        conn.execute("BEGIN")
+
+        rows = conn.execute(
+            '''SELECT
+                   s.id, s.subscription_name, s.recurring_rule_id,
+                   r.id, r.name, r.type, r.schedule_kind, r.is_active,
+                   r.amount, r.monthly_charge_days,
+                   r.schedule_start_date, r.next_due_date,
+                   a.id, a.account_name
+               FROM subscriptions s
+               LEFT JOIN recurring_transactions r
+                 ON r.id = s.recurring_rule_id
+                AND r.user_id = s.user_id
+               LEFT JOIN accounts a
+                 ON a.id = r.account_id
+                AND a.user_id = s.user_id
+               WHERE s.user_id = ?
+               ORDER BY s.id''',
+            (user_id,)
+        ).fetchall()
+
+        processed = set(
+            conn.execute(
+                '''SELECT recurring_rule_id, scheduled_date
+                   FROM processed_schedule_occurrences
+                   WHERE user_id = ?
+                     AND scheduled_date >= ?
+                     AND scheduled_date < ?''',
+                (
+                    user_id,
+                    month_start.isoformat(),
+                    month_end.isoformat()
+                )
+            ).fetchall()
+        )
+
+    for row in rows:
+        (
+            sub_id, legacy_name, linked_rule_id,
+            rule_id, rule_name, rule_type, schedule_kind, is_active,
+            stored_amount, billing_days, start_text, next_due_text,
+            account_id, account_name
+        ) = row
+
+        if linked_rule_id is None:
+            notices.append(
+                f"'{legacy_name}' needs schedule setup and is excluded."
+            )
+            continue
+
+        if (
+            rule_id is None
+            or rule_type != "expense"
+            or schedule_kind != "subscription"
+        ):
+            notices.append(
+                f"'{legacy_name}' has an invalid schedule link "
+                "and is excluded."
+            )
+            continue
+
+        if not is_active:
+            continue
+
+        if account_id is None:
+            notices.append(
+                f"'{rule_name}' has no valid account and is excluded."
+            )
+            continue
+
+        try:
+            amount = float(stored_amount)
+
+            if not math.isfinite(amount) or amount <= 0:
+                raise ValueError("Invalid amount per occurrence.")
+
+            start_date = datetime.strptime(
+                start_text, "%Y-%m-%d"
+            ).date()
+            next_due = datetime.strptime(
+                next_due_text, "%Y-%m-%d"
+            ).date()
+
+            # Do not invent occurrences earlier than the schedule's
+            # start date or its current next-due boundary.
+            candidate = next_subscription_billing_date(
+                billing_days,
+                max(month_start, start_date, next_due),
+                inclusive=True
+            )
+
+            dates = []
+
+            while candidate < month_end:
+                if (rule_id, candidate.isoformat()) not in processed:
+                    dates.append(candidate.isoformat())
+
+                candidate = next_subscription_billing_date(
+                    billing_days,
+                    candidate,
+                    inclusive=False
+                )
+
+        except (TypeError, ValueError, OverflowError) as error:
+            notices.append(
+                f"'{rule_name}' could not be evaluated: {error}"
+            )
+            continue
+
+        subscriptions.append({
+            "subscription_id": sub_id,
+            "rule_id": rule_id,
+            "name": rule_name,
+            "account_name": account_name,
+            "amount_per_occurrence": amount,
+            "scheduled_dates": dates,
+            "occurrence_count": len(dates),
+            "scheduled_total": amount * len(dates)
+        })
+
+    subscriptions.sort(
+        key=lambda item: (
+            -item["scheduled_total"],
+            item["name"].casefold(),
+            item["subscription_id"]
+        )
+    )
+
+    return {
+        "period_start": month_start.isoformat(),
+        "period_last_day": (
+            month_end - timedelta(days=1)
+        ).isoformat(),
+        "evaluated_active_schedule_count": len(subscriptions),
+        "occurrence_count": sum(
+            item["occurrence_count"] for item in subscriptions
+        ),
+        "scheduled_total": sum(
+            item["scheduled_total"] for item in subscriptions
+        ),
+        "subscriptions": subscriptions,
+        "notices": notices,
+        "suggestion": (
+            "Consider reviewing whether these subscription plans "
+            "still meet your needs before their scheduled dates."
+        ),
+        "limitation": (
+            "An estimate using current active schedules and prices, "
+            "not a provider invoice or a complete cash-flow forecast. "
+            "Future price changes, cancellations, and schedule edits "
+            "are unknown. The app does not measure subscription usage. "
+            "Paused and unevaluable schedules are excluded."
+        )
+    }
+
 def get_budget_recommendations(user_id, reference_date=None):
     """
     Builds explainable recommendations for current calendar budgets.
