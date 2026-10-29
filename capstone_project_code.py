@@ -11412,6 +11412,194 @@ def render_upcoming_expense_recommendations(
         width=20
     ).pack(anchor="w", padx=12, pady=(0, 12))
 
+def render_subscription_cost_review(
+    parent,
+    user_id,
+    reference_date=None
+):
+    """
+    Displays next-calendar-month subscription commitments.
+
+    Reads data only. Independent of the selected report month.
+    """
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    section = tk.Frame(
+        parent,
+        bg="#fffaf0",
+        relief="solid",
+        bd=1
+    )
+    section.pack(fill="x", pady=10)
+
+    tk.Label(
+        section,
+        text="Subscription Cost Review",
+        font=("Segoe UI", 12, "bold"),
+        bg="#fffaf0",
+        fg="#975a16"
+    ).pack(anchor="w", padx=12, pady=(10, 4))
+
+    try:
+        result = get_subscription_cost_review(
+            user_id,
+            reference_date=reference_date
+        )
+    except (sqlite3.Error, ValueError, OverflowError) as error:
+        tk.Label(
+            section,
+            text=f"Subscription costs could not be calculated: {error}",
+            font=("Segoe UI", 9),
+            bg="#fffaf0",
+            fg="#c53030",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+        return
+
+    sym = get_currency(user_id)
+
+    tk.Label(
+        section,
+        text=(
+            f"Next calendar month: {result['period_start']} "
+            f"→ {result['period_last_day']}\n"
+            f"Based on schedule settings as of "
+            f"{reference_date.isoformat()}.\n"
+            "Independent of the report month selected above."
+        ),
+        font=("Segoe UI", 9),
+        bg="#fffaf0",
+        fg="#4a5568",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    if result["notices"]:
+        notice_frame = tk.Frame(section, bg="#fffbeb")
+        notice_frame.pack(fill="x", padx=12, pady=(0, 8))
+
+        tk.Label(
+            notice_frame,
+            text="Excluded or incomplete subscription records",
+            font=("Segoe UI", 9, "bold"),
+            bg="#fffbeb",
+            fg="#975a16"
+        ).pack(anchor="w", padx=8, pady=(6, 3))
+
+        for notice in result["notices"]:
+            tk.Label(
+                notice_frame,
+                text=f"• {notice}",
+                font=("Segoe UI", 9),
+                bg="#fffbeb",
+                fg="#975a16",
+                wraplength=560,
+                justify="left"
+            ).pack(anchor="w", padx=8, pady=(0, 5))
+
+    tk.Label(
+        section,
+        text=(
+            "Active schedules successfully evaluated: "
+            f"{result['evaluated_active_schedule_count']}\n"
+            "Unprocessed occurrences scheduled in this period: "
+            f"{result['occurrence_count']}\n"
+            "Total scheduled expenses: "
+            f"{sym}{result['scheduled_total']:,.2f}"
+        ),
+        font=("Segoe UI", 10, "bold"),
+        bg="#fffaf0",
+        fg="#2d3748",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    if not result["subscriptions"]:
+        tk.Label(
+            section,
+            text=(
+                "No active subscription schedules could be evaluated. "
+                "Check the notices above and the Subscriptions screen. "
+                "This does not establish that you have no subscription costs."
+            ),
+            font=("Segoe UI", 9),
+            bg="#fffaf0",
+            fg="#718096",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    for subscription in result["subscriptions"]:
+        card = tk.Frame(section, bg="white", relief="solid", bd=1)
+        card.pack(fill="x", padx=12, pady=5)
+
+        tk.Label(
+            card,
+            text=subscription["name"],
+            font=("Segoe UI", 11, "bold"),
+            bg="white",
+            fg="#2d3748",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(10, 4))
+
+        if subscription["scheduled_dates"]:
+            date_text = ", ".join(subscription["scheduled_dates"])
+        else:
+            date_text = "No unprocessed occurrences in this period."
+
+        tk.Label(
+            card,
+            text=(
+                f"Account: {subscription['account_name']}\n"
+                f"Current amount per occurrence: "
+                f"{sym}{subscription['amount_per_occurrence']:,.2f}\n"
+                f"Occurrence count: {subscription['occurrence_count']}\n"
+                f"Scheduled total: "
+                f"{sym}{subscription['scheduled_total']:,.2f}\n"
+                f"Dates: {date_text}"
+            ),
+            font=("Segoe UI", 9),
+            bg="white",
+            fg="#4a5568",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(0, 10))
+
+    tk.Label(
+        section,
+        text=result["suggestion"],
+        font=("Segoe UI", 10, "bold"),
+        bg="#fffaf0",
+        fg="#975a16",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(8, 6))
+
+    tk.Label(
+        section,
+        text=(
+            result["limitation"]
+            + " This total may overlap with the seven-day upcoming-expense "
+              "section; do not add the two totals together."
+        ),
+        font=("Segoe UI", 8, "italic"),
+        bg="#fffaf0",
+        fg="#718096",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    make_button(
+        section,
+        "Review Subscriptions",
+        lambda: show_subscription_list(user_id),
+        color="#dd6b20",
+        width=22
+    ).pack(anchor="w", padx=12, pady=(0, 12))
+
 # ============================================================
 # DASHBOARD SCREEN
 # ============================================================
@@ -11484,7 +11672,7 @@ def show_dashboard(user_id):
         for widget in insights_frame.winfo_children():
             widget.destroy()
 
-        # Both current-guidance sections use the same reference date.
+        # All current-guidance sections use the same reference date.
         today = datetime.today().date()
 
         render_budget_recommendations(
@@ -11494,6 +11682,12 @@ def show_dashboard(user_id):
         )
 
         render_upcoming_expense_recommendations(
+            insights_frame,
+            user_id,
+            reference_date=today
+        )
+
+        render_subscription_cost_review(
             insights_frame,
             user_id,
             reference_date=today
