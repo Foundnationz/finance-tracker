@@ -2752,6 +2752,48 @@ def view_budgets(user_id):
         cursor.execute("SELECT * FROM budgets WHERE user_id = ?", (user_id,))
         return cursor.fetchall()
 
+def get_budget_period(timeframe, reference_date=None):
+    """
+    Returns calendar-period information for a budget.
+
+    Returns:
+        period_start: inclusive datetime.date
+        period_end: exclusive datetime.date
+        days_remaining: includes the reference day
+
+    reference_date:
+        Optional datetime.date used for testing or historical analysis.
+        Defaults to today's local date.
+    """
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    if timeframe == "Daily":
+        period_start = reference_date
+        period_end = period_start + timedelta(days=1)
+
+    elif timeframe == "Weekly":
+        period_start = reference_date - timedelta(
+            days=reference_date.weekday()
+        )
+        period_end = period_start + timedelta(days=7)
+
+    elif timeframe == "Monthly":
+        period_start = reference_date.replace(day=1)
+        period_end = period_start + relativedelta(months=1)
+
+    elif timeframe == "Yearly":
+        period_start = reference_date.replace(month=1, day=1)
+        period_end = period_start + relativedelta(years=1)
+
+    else:
+        raise ValueError(
+            f"Unsupported budget timeframe: {timeframe}"
+        )
+
+    days_remaining = (period_end - reference_date).days
+
+    return period_start, period_end, days_remaining
 
 def calculate_budget_progress(budget_id, user_id):
     """
