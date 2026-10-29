@@ -10552,6 +10552,213 @@ def render_budget_recommendations(parent, user_id, reference_date=None):
         justify="left"
     ).pack(anchor="w", padx=12, pady=(6, 12))
 
+def render_category_spending_recommendations(
+    parent,
+    user_id,
+    selected_year,
+    selected_month,
+    reference_date=None
+):
+    """
+    Displays expense comparisons for the selected report month.
+
+    Reads data only. Does not generate transactions or change balances.
+    """
+    section = tk.Frame(parent, bg="#f7fafc", relief="solid", bd=1)
+    section.pack(fill="x", pady=10)
+
+    tk.Label(
+        section,
+        text="Selected-Period Spending Insights",
+        font=("Segoe UI", 12, "bold"),
+        bg="#f7fafc",
+        fg="#2b6cb0"
+    ).pack(anchor="w", padx=12, pady=(10, 4))
+
+    try:
+        result = get_category_spending_recommendations(
+            user_id,
+            selected_year,
+            selected_month,
+            reference_date=reference_date
+        )
+    except (sqlite3.Error, ValueError, OverflowError) as error:
+        tk.Label(
+            section,
+            text=f"Spending comparisons are unavailable: {error}",
+            font=("Segoe UI", 9),
+            bg="#f7fafc",
+            fg="#c53030",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 10))
+        return
+
+    periods = result["periods"]
+    recommendations = result["recommendations"]
+    sym = get_currency(user_id)
+
+    selected_range = (
+        f"{periods['selected_start'].isoformat()} "
+        f"→ {periods['selected_last_day'].isoformat()}"
+    )
+    previous_range = (
+        f"{periods['previous_start'].isoformat()} "
+        f"→ {periods['previous_last_day'].isoformat()}"
+    )
+
+    tk.Label(
+        section,
+        text=(
+            f"Selected period: {selected_range}\n"
+            f"Comparison period: {previous_range}"
+        ),
+        font=("Segoe UI", 9),
+        bg="#f7fafc",
+        fg="#4a5568",
+        justify="left",
+        wraplength=600
+    ).pack(anchor="w", padx=12, pady=(0, 6))
+
+    if periods["mode"] == "matched_elapsed_days":
+        comparison_note = (
+            f"Comparing {periods['selected_days']} days in each month."
+        )
+
+        if periods["current_month_cutoff_limited"]:
+            comparison_note += (
+                " The previous month is shorter, so the selected-month "
+                "comparison stops before today to keep the day counts equal."
+            )
+    else:
+        comparison_note = (
+            "Comparing completed calendar months: "
+            f"{periods['selected_days']} days versus "
+            f"{periods['previous_days']} days."
+        )
+
+        if not periods["equal_day_counts"]:
+            comparison_note += (
+                " Different month lengths can contribute to a change "
+                "in total spending."
+            )
+
+    tk.Label(
+        section,
+        text=comparison_note,
+        font=("Segoe UI", 8, "italic"),
+        bg="#f7fafc",
+        fg="#718096",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    if result["invalid_amount_count"]:
+        tk.Label(
+            section,
+            text=(
+                f"Data-quality notice: "
+                f"{result['invalid_amount_count']} expense record(s) "
+                "with invalid amounts were excluded."
+            ),
+            font=("Segoe UI", 9),
+            bg="#f7fafc",
+            fg="#975a16",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    if not recommendations:
+        tk.Label(
+            section,
+            text=(
+                "No category spending increases were found in the "
+                "valid expense records for these ranges. This may also "
+                "occur when there are no recorded expenses."
+            ),
+            font=("Segoe UI", 10),
+            bg="#f7fafc",
+            fg="#4a5568",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 10))
+
+    for insight in recommendations:
+        card = tk.Frame(section, bg="white", relief="solid", bd=1)
+        card.pack(fill="x", padx=12, pady=5)
+
+        category = insight["category"]
+        category_label = (
+            str(category)
+            if category is not None and str(category).strip()
+            else "Unnamed category"
+        )
+
+        tk.Label(
+            card,
+            text=f"{category_label}: recorded spending increased",
+            font=("Segoe UI", 11, "bold"),
+            bg="white",
+            fg="#2d3748",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(10, 4))
+
+        percentage = insight["percentage_increase"]
+
+        if percentage is None:
+            change_text = (
+                f"Increase in recorded amount: "
+                f"{sym}{insight['increase']:,.2f}\n"
+                "No positive spending total was recorded in the comparison "
+                "period; a percentage increase is not calculated."
+            )
+        else:
+            change_text = (
+                f"Increase: {sym}{insight['increase']:,.2f} "
+                f"({percentage:.1f}%)"
+            )
+
+        tk.Label(
+            card,
+            text=(
+                f"Selected period: {sym}{insight['selected_amount']:,.2f}\n"
+                f"Previous period: {sym}{insight['previous_amount']:,.2f}\n"
+                f"{change_text}"
+            ),
+            font=("Segoe UI", 10),
+            bg="white",
+            fg="#4a5568",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10)
+
+        tk.Label(
+            card,
+            text=insight["suggestion"],
+            font=("Segoe UI", 9),
+            bg="white",
+            fg="#2d3748",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(6, 10))
+
+    tk.Label(
+        section,
+        text=(
+            "Showing up to three increases, ranked by monetary difference. "
+            "Increased spending is not automatically a problem. "
+            "Missing entries, changed category names, one-off purchases, "
+            "and expenses recorded as balance adjustments can affect results. "
+            "This comparison does not measure affordability."
+        ),
+        font=("Segoe UI", 8, "italic"),
+        bg="#f7fafc",
+        fg="#718096",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(6, 12))
+
 # ============================================================
 # DASHBOARD SCREEN
 # ============================================================
@@ -10661,6 +10868,15 @@ def show_dashboard(user_id):
                 (user_id, selected_month, selected_year)
             )
             transactions = cursor.fetchall()
+
+        # Selected-period analysis is separate from today's budget guidance.
+        render_category_spending_recommendations(
+            results_frame,
+            user_id,
+            selected_year=int(selected_year),
+            selected_month=int(selected_month),
+            reference_date=datetime.today().date()
+        )
 
         if not transactions:
             tk.Label(results_frame,
