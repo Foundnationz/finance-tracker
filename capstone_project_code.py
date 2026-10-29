@@ -2875,6 +2875,146 @@ def get_spending_comparison_periods(
         )
     }
 
+def get_category_spending_recommendations(
+    user_id,
+    selected_year,
+    selected_month,
+    reference_date=None
+):
+    """
+    Compares recorded expense totals by category.
+
+    Returns:
+        {
+            "periods": comparison-period information,
+            "recommendations": up to three spending increases,
+            "invalid_amount_count": excluded invalid expense amounts
+        }
+
+    Reads data only. Does not change financial records.
+    """
+    import math
+    from decimal import Decimal
+
+    periods = get_spending_comparison_periods(
+        selected_year,
+        selected_month,
+        reference_date=reference_date
+    )
+
+    invalid_amount_count = 0
+
+    def collect_totals(conn, start, end):
+        nonlocal invalid_amount_count
+
+        rows = conn.execute(
+            '''SELECT category, amount
+               FROM transactions
+               WHERE user_id = ?
+                 AND type = 'expense'
+                 AND date >= ?
+                 AND date < ?''',
+            (user_id, start.isoformat(), end.isoformat())
+        ).fetchall()
+
+        totals = {}
+
+        for category, amount in rows:
+            try:
+                numeric_amount = float(amount)
+
+                if (
+                    not math.isfinite(numeric_amount)
+                    or numeric_amount < 0
+                ):
+                    raise ValueError
+
+                # Decimal avoids introducing extra binary-float
+                # summation noise in this comparison.
+                value = Decimal(str(amount))
+
+            except (TypeError, ValueError, OverflowError):
+                invalid_amount_count += 1
+                continue
+
+            # Category identity remains the stored category name.
+            # Renamed or differently capitalised names are not merged.
+            totals[category] = (
+                totals.get(category, Decimal("0")) + value
+            )
+
+        return totals
+
+    with get_db() as conn:
+        # Both reads use the same database snapshot.
+        conn.execute("BEGIN")
+
+        selected_totals = collect_totals(
+            conn,
+            periods["selected_start"],
+            periods["selected_end"]
+        )
+
+        previous_totals = collect_totals(
+            conn,
+            periods["previous_start"],
+            periods["previous_end"]
+        )
+
+    increases = []
+
+    categories = set(selected_totals) | set(previous_totals)
+
+    for category in categories:
+        selected_amount = selected_totals.get(
+            category, Decimal("0")
+        )
+        previous_amount = previous_totals.get(
+            category, Decimal("0")
+        )
+        increase = selected_amount - previous_amount
+
+        if increase <= 0:
+            continue
+
+        percentage = (
+            float((increase / previous_amount) * Decimal("100"))
+            if previous_amount > 0
+            else None
+        )
+
+        increases.append({
+            "kind": "category_spending_increase",
+            "category": category,
+            "selected_amount": float(selected_amount),
+            "previous_amount": float(previous_amount),
+            "increase": float(increase),
+            "percentage_increase": percentage,
+            "has_previous_spending": previous_amount > 0,
+            "suggestion": (
+                "Consider reviewing the larger recorded expenses in "
+                "this category and whether they fit your priorities."
+            ),
+            "limitation": (
+                "An increase is not automatically a problem. "
+                "Missing records, category-name changes, and one-off "
+                "expenses can affect this comparison."
+            )
+        })
+
+    increases.sort(
+        key=lambda item: (
+            -item["increase"],
+            str(item["category"]).casefold()
+        )
+    )
+
+    return {
+        "periods": periods,
+        "recommendations": increases[:3],
+        "invalid_amount_count": invalid_amount_count
+    }
+
 def get_budget_recommendations(user_id, reference_date=None):
     """
     Builds explainable recommendations for current calendar budgets.
