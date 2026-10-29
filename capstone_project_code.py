@@ -2795,53 +2795,29 @@ def get_budget_period(timeframe, reference_date=None):
 
     return period_start, period_end, days_remaining
 
-def calculate_budget_progress(budget_id, user_id):
+def calculate_budget_progress(budget_id, user_id, reference_date=None):
     """
-    Calculates % of budget spent.
-    Looks at transactions in the current timeframe window only.
-    e.g. Monthly budget only counts transactions this month.
+    Calculates uncapped budget usage using the same expenses
+    returned by get_budget_transactions().
     """
-    with get_db() as conn:
-        cursor = conn.cursor()
+    (
+        transactions,
+        total_spent,
+        budget_limit,
+        budget_name,
+        category,
+        timeframe,
+        window_start
+    ) = get_budget_transactions(
+        budget_id,
+        user_id,
+        reference_date=reference_date
+    )
 
-        cursor.execute(
-            "SELECT category, amount, timeframe, start_date FROM budgets WHERE id = ?",
-            (budget_id,)
-        )
-        row = cursor.fetchone()
-        if not row:
-            return 0
+    if not budget_name or budget_limit <= 0:
+        return 0
 
-        category, total_budget, timeframe, start_date = row
-        today = datetime.today()
-
-        # Determine window start based on timeframe
-        if timeframe == "Daily":
-            window_start = today.strftime("%Y-%m-%d")
-        elif timeframe == "Weekly":
-            window_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
-        elif timeframe == "Monthly":
-            window_start = today.replace(day=1).strftime("%Y-%m-%d")
-        elif timeframe == "Yearly":
-            window_start = today.replace(month=1, day=1).strftime("%Y-%m-%d")
-        else:
-            window_start = start_date
-
-        # General = all expense categories, else filter by specific category
-        if category in ("General", ALL_EXPENSE_CATEGORIES):
-            cursor.execute(
-                "SELECT SUM(amount) FROM transactions WHERE user_id = ? AND type = 'expense' AND date >= ?",
-                (user_id, window_start)
-            )
-        else:
-            cursor.execute(
-                "SELECT SUM(amount) FROM transactions WHERE user_id = ? AND type = 'expense' AND category = ? AND date >= ?",
-                (user_id, category, window_start)
-            )
-
-        total_spent = cursor.fetchone()[0] or 0
-        # Removed the min() cap here so alerts can detect over 100%
-        return (total_spent / total_budget) * 100 if total_budget else 0
+    return (total_spent / budget_limit) * 100
 
 def show_budget_spending(user_id, budget_id):
     """
@@ -3091,74 +3067,95 @@ def show_budget_spending(user_id, budget_id):
         close_popup, color="#718096", width=12
     ).pack()
 
-def get_budget_transactions(budget_id, user_id):
+def get_budget_transactions(budget_id, user_id, reference_date=None):
     """
-    Returns the exact list of expense transactions that
-    contribute to a budget's progress calculation.
+    Returns expenses counted toward a budget through reference_date.
 
-    Uses the same window_start logic as calculate_budget_progress
-    so the numbers always match what the progress bar shows.
+    Defaults to today's local date.
 
-    Returns:
-        - transactions: list of tuples
-          (category, amount, date, time, notes, reference, necessity)
-        - total_spent: total amount spent in the window
-        - budget_limit: the budget's amount limit
-        - budget_name: name of the budget
-        - category: budget's category
-        - timeframe: budget's timeframe
-        - window_start: the date from which spending is counted
+    Preserves the existing seven-value return format:
+        transactions, total_spent, budget_limit, budget_name,
+        category, timeframe, window_start
+
+    Each transaction contains:
+        category, amount, date, time, notes, reference, necessity
     """
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
     with get_db() as conn:
         cursor = conn.cursor()
 
-        # Get budget details
+        # Check both budget ID and ownership.
         cursor.execute(
-            "SELECT budget_name, category, amount, timeframe, start_date FROM budgets WHERE id = ?",
-            (budget_id,)
+            '''SELECT budget_name, category, amount, timeframe
+               FROM budgets
+               WHERE id = ? AND user_id = ?''',
+            (budget_id, user_id)
         )
-        row = cursor.fetchone()
+        budget = cursor.fetchone()
 
-        if not row:
+        if budget is None:
             return [], 0, 0, "", "", "", ""
 
-        budget_name, category, budget_limit, timeframe, start_date = row
-        today = datetime.today()
+        budget_name, category, budget_limit, timeframe = budget
 
-        # Determine window start — same logic as calculate_budget_progress
-        if timeframe == "Daily":
-            window_start = today.strftime("%Y-%m-%d")
-        elif timeframe == "Weekly":
-            window_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
-        elif timeframe == "Monthly":
-            window_start = today.replace(day=1).strftime("%Y-%m-%d")
-        elif timeframe == "Yearly":
-            window_start = today.replace(month=1, day=1).strftime("%Y-%m-%d")
-        else:
-            window_start = start_date
+        period_start, period_end, _ = get_budget_period(
+            timeframe,
+            reference_date
+        )
 
-        # Fetch matching transactions
-        if category in ("General", ALL_EXPENSE_CATEGORIES):
-            cursor.execute(
-                '''SELECT category, amount, date, time, notes, reference, necessity
-                   FROM transactions
-                   WHERE user_id = ? AND type = 'expense' AND date >= ?
-                   ORDER BY date DESC, time DESC''',
-                (user_id, window_start)
-            )
-        else:
-            cursor.execute(
-                '''SELECT category, amount, date, time, notes, reference, necessity
-                   FROM transactions
-                   WHERE user_id = ? AND type = 'expense' AND category = ? AND date >= ?
-                   ORDER BY date DESC, time DESC''',
-                (user_id, category, window_start)
-            )
+        # Include the reference day, but exclude later dates.
+        spending_end = min(
+            period_end,
+            reference_date + timedelta(days=1)
+        )
 
+        query = '''
+            SELECT category, amount, date, time,
+                   notes, reference, necessity
+            FROM transactions
+            WHERE user_id = ?
+              AND type = 'expense'
+              AND date >= ?
+              AND date < ?
+        '''
+
+        params = [
+            user_id,
+            period_start.isoformat(),
+            spending_end.isoformat()
+        ]
+
+        # Retain compatibility with the old "General" budget option.
+        category_key = (category or "").strip().casefold()
+        includes_all_categories = category_key in (
+            "general",
+            ALL_EXPENSE_CATEGORIES.casefold()
+        )
+
+        if not includes_all_categories:
+            query += " AND category = ?"
+            params.append(category)
+
+        query += " ORDER BY date DESC, time DESC, id DESC"
+
+        cursor.execute(query, params)
         transactions = cursor.fetchall()
-        total_spent  = sum(t[1] for t in transactions)
 
-    return transactions, total_spent, budget_limit, budget_name, category, timeframe, window_start
+        total_spent = sum(
+            transaction[1] for transaction in transactions
+        )
+
+    return (
+        transactions,
+        total_spent,
+        budget_limit,
+        budget_name,
+        category,
+        timeframe,
+        period_start.isoformat()
+    )
 
 def get_expense_categories(user_id, include_all=False):
     """
