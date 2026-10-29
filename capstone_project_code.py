@@ -10134,6 +10134,203 @@ def show_fund_wishlist_item(user_id, item_id, item_name):
         color="#718096"
     ).pack(side="left", padx=5)
 
+def render_budget_recommendations(parent, user_id, reference_date=None):
+    """
+    Displays current budget recommendations in the supplied frame.
+
+    Reads financial data only. Does not generate transactions,
+    change balances, or adjust budget limits.
+    """
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    section = tk.Frame(parent, bg="#ebf8ff", relief="solid", bd=1)
+    section.pack(fill="x", pady=10)
+
+    tk.Label(
+        section,
+        text="Financial Insights & Suggestions",
+        font=("Segoe UI", 13, "bold"),
+        bg="#ebf8ff",
+        fg="#2b6cb0"
+    ).pack(anchor="w", padx=12, pady=(12, 4))
+
+    tk.Label(
+        section,
+        text=(
+            f"Current budget guidance as of {reference_date.isoformat()}.\n"
+            "This section is independent of the report month selected above. "
+            "It uses recorded expenses through today."
+        ),
+        font=("Segoe UI", 9),
+        bg="#ebf8ff",
+        fg="#4a5568",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    try:
+        recommendations = get_budget_recommendations(
+            user_id,
+            reference_date=reference_date
+        )
+    except (sqlite3.Error, ValueError, OverflowError) as error:
+        tk.Label(
+            section,
+            text=(
+                "Budget suggestions could not be calculated.\n"
+                f"Details: {error}"
+            ),
+            font=("Segoe UI", 10),
+            bg="#ebf8ff",
+            fg="#c53030",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+        return
+
+    if not recommendations:
+        tk.Label(
+            section,
+            text=(
+                "No budget suggestions are available. "
+                "Create a calendar budget with a valid positive limit "
+                "to enable this guidance."
+            ),
+            font=("Segoe UI", 10),
+            bg="#ebf8ff",
+            fg="#718096",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+        return
+
+    sym = get_currency(user_id)
+
+    colors = {
+        "exceeded": "#c53030",
+        "at_limit": "#975a16",
+        "allowance": "#2b6cb0"
+    }
+
+    for insight in recommendations:
+        card = tk.Frame(section, bg="white", relief="solid", bd=1)
+        card.pack(fill="x", padx=12, pady=5)
+
+        color = colors[insight["severity"]]
+
+        tk.Label(
+            card,
+            text=insight["title"],
+            font=("Segoe UI", 11, "bold"),
+            bg="white",
+            fg=color,
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(10, 4))
+
+        tk.Label(
+            card,
+            text=(
+                f"{insight['timeframe']} | {insight['category']}\n"
+                f"Calendar period: {insight['period_start']} "
+                f"→ {insight['period_last_day']}\n"
+                f"Budget limit: {sym}{insight['limit']:,.2f}\n"
+                f"Recorded spending: {sym}{insight['spent']:,.2f}"
+            ),
+            font=("Segoe UI", 9),
+            bg="white",
+            fg="#4a5568",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10)
+
+        if insight["severity"] == "allowance":
+            days = insight["days_remaining"]
+            day_label = "day" if days == 1 else "days"
+
+            explanation = (
+                f"Remaining: {sym}{insight['remaining']:,.2f}\n"
+                f"{days} {day_label} remaining, including today.\n"
+                f"Suggested average daily allowance: "
+                f"{sym}{insight['daily_allowance']:,.2f}\n\n"
+                f"Calculation: remaining budget ÷ {days} {day_label}; "
+                "rounded down to two decimal places."
+            )
+
+        elif insight["severity"] == "at_limit":
+            explanation = (
+                "Remaining: "
+                f"{sym}{insight['remaining']:,.2f}\n"
+                "Recorded spending has reached the current budget limit."
+            )
+
+        else:
+            explanation = (
+                f"Over the limit by: {sym}{insight['over']:,.2f}"
+            )
+
+        tk.Label(
+            card,
+            text=explanation,
+            font=("Segoe UI", 10, "bold"),
+            bg="white",
+            fg=color,
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(6, 4))
+
+        tk.Label(
+            card,
+            text=insight["suggestion"],
+            font=("Segoe UI", 9),
+            bg="white",
+            fg="#2d3748",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(0, 6))
+
+        if insight["transaction_count"] == 0:
+            tk.Label(
+                card,
+                text=(
+                    "No matching expense entries were found. "
+                    "Check that your records are complete before "
+                    "relying on this allowance."
+                ),
+                font=("Segoe UI", 8, "italic"),
+                bg="white",
+                fg="#975a16",
+                wraplength=570,
+                justify="left"
+            ).pack(anchor="w", padx=10, pady=(0, 6))
+
+        make_button(
+            card,
+            "View Spending",
+            lambda bid=insight["budget_id"]: show_budget_spending(
+                user_id, bid
+            ),
+            color="#805ad5",
+            width=16
+        ).pack(anchor="w", padx=10, pady=(0, 10))
+
+    tk.Label(
+        section,
+        text=(
+            "Rule-based guidance, not an affordability assessment. "
+            "It does not reserve funds or subtract upcoming scheduled "
+            "expenses. Missing entries can change the results. "
+            "Overlapping budgets are separate views of spending: "
+            "do not add their allowances together. "
+            "Displayed amounts are rounded."
+        ),
+        font=("Segoe UI", 8, "italic"),
+        bg="#ebf8ff",
+        fg="#718096",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(6, 12))
 
 # ============================================================
 # DASHBOARD SCREEN
@@ -10199,10 +10396,29 @@ def show_dashboard(user_id):
     results_frame = tk.Frame(scroll, bg="#f0f4f8")
     results_frame.pack(fill="both", expand=True, padx=20, pady=5)
 
+    # Keep current guidance separate from the selected-month report.
+    insights_frame = tk.Frame(scroll, bg="#f0f4f8")
+    insights_frame.pack(fill="x", padx=20, pady=5)
+
+    def refresh_current_insights():
+        for widget in insights_frame.winfo_children():
+            widget.destroy()
+
+        render_budget_recommendations(
+            insights_frame,
+            user_id,
+            reference_date=datetime.today().date()
+        )
+
+    # Show current guidance when the Dashboard first opens.
+    refresh_current_insights()
+
     def on_show():
         # Clear previous results
         for widget in results_frame.winfo_children():
             widget.destroy()
+
+        refresh_current_insights()
 
         month_map = {
             "January": "01", "February": "02", "March": "03",
@@ -10274,7 +10490,11 @@ def show_dashboard(user_id):
                  fg="#9b2c2c").pack(anchor="w", padx=10, pady=2)
 
         net_color = "#276749" if net >= 0 else "#9b2c2c"
-        net_label = "Net Savings" if net >= 0 else "Net Deficit"
+        net_label = (
+            "Recorded Net Surplus"
+            if net >= 0
+            else "Recorded Net Deficit"
+        )
         tk.Label(summary_frame,
                  text=f"  {'💰' if net >= 0 else '⚠️'} {net_label}:    {sym}{abs(net):,.2f}",
                  font=("Segoe UI", 10, "bold"), bg="white",
