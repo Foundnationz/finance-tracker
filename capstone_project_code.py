@@ -2647,7 +2647,12 @@ def show_edit_budget(user_id, budget_id):
     note_frame.pack(fill="x", padx=20, pady=5)
     tk.Label(
         note_frame,
-        text="ℹ️ Changing the timeframe will recalculate the end date from today.",
+        text=(
+            "Budgets use calendar periods: today, Monday–Sunday, "
+            "the current month, or the current year. "
+            "Changing the timeframe recalculates the current period; "
+            "it does not start a new rolling period today."
+        ),
         font=("Segoe UI", 9, "italic"),
         bg="#ebf8ff", fg="#2c5282",
         wraplength=420, pady=8
@@ -2662,7 +2667,9 @@ def show_edit_budget(user_id, budget_id):
     )
     msg_label.pack(padx=20, pady=5)
 
-    def on_save():
+    def on_save():  
+        import math
+
         new_name      = name_entry.get().strip()
         new_timeframe = timeframe_var.get()
         new_category  = category_var.get()
@@ -2682,23 +2689,20 @@ def show_edit_budget(user_id, budget_id):
                 text="❌ Amount must be a valid number.", fg="red")
             return
 
-        if new_amount <= 0:
+        if not math.isfinite(new_amount) or new_amount <= 0:
             msg_label.config(
-                text="❌ Amount must be greater than 0.", fg="red")
+                text="❌ Amount must be a finite number greater than zero.",
+                fg="red"
+            )
             return
 
-        # Recalculate end date based on new timeframe
-        start_date = datetime.today().date()
-        if new_timeframe == "Daily":
-            end_date = start_date + timedelta(days=1)
-        elif new_timeframe == "Weekly":
-            end_date = start_date + timedelta(weeks=1)
-        elif new_timeframe == "Monthly":
-            end_date = start_date + relativedelta(months=1)
-        elif new_timeframe == "Yearly":
-            end_date = start_date + relativedelta(years=1)
-        else:
-            end_date = start_date
+        # Refresh the stored snapshot using calendar boundaries.
+        # This does not create a rolling period starting today.
+        try:
+            start_date, end_date, _ = get_budget_period(new_timeframe)
+        except ValueError as error:
+            msg_label.config(text=str(error), fg="red")
+            return
 
         # Save changes to database
         with get_db() as conn:
@@ -3281,6 +3285,8 @@ def show_add_budget(user_id):
     msg_label.pack(pady=5)
 
     def on_submit():
+        import math
+
         name = name_entry.get().strip()
         timeframe = timeframe_var.get()
         category = category_var.get()
@@ -3296,22 +3302,20 @@ def show_add_budget(user_id):
             msg_label.config(text="❌ Amount must be a valid number.", fg="red")
             return
 
-        if amount <= 0:
-            msg_label.config(text="❌ Amount must be greater than 0.", fg="red")
+        if not math.isfinite(amount) or amount <= 0:
+            msg_label.config(
+                text="❌ Amount must be a finite number greater than zero.",
+                fg="red"
+            )
             return
 
-        # Calculate start and end dates based on timeframe
-        start_date = datetime.today().date()
-        if timeframe == "Daily":
-            end_date = start_date + timedelta(days=1)
-        elif timeframe == "Weekly":
-            end_date = start_date + timedelta(weeks=1)
-        elif timeframe == "Monthly":
-            end_date = start_date + relativedelta(months=1)
-        elif timeframe == "Yearly":
-            end_date = start_date + relativedelta(years=1)
-        else:
-            end_date = start_date
+        # Store a snapshot of the current calendar period.
+        # end_date is exclusive: it is not a counted spending date.
+        try:
+            start_date, end_date, _ = get_budget_period(timeframe)
+        except ValueError as error:
+            msg_label.config(text=str(error), fg="red")
+            return
 
         with get_db() as conn:
             cursor = conn.cursor()
