@@ -3716,6 +3716,181 @@ def get_repeated_spending_review(
         )
     }
 
+def get_data_quality_report(user_id, reference_date=None):
+    """
+    Collects data-quality issues that can affect insights.
+
+    Reads data only. Does not modify any records.
+    """
+    import math
+    from datetime import date
+
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    month_start = reference_date.replace(day=1)
+    spending_end = reference_date + timedelta(days=1)
+
+    issues = []
+
+    with get_db() as conn:
+        conn.execute("BEGIN")
+
+        # Unclassified expenses in the current month, through today.
+        unclassified = conn.execute(
+            '''SELECT COUNT(*)
+               FROM transactions
+               WHERE user_id = ?
+                 AND type = 'expense'
+                 AND date >= ?
+                 AND date < ?
+                 AND (
+                     necessity IS NULL
+                     OR necessity NOT IN ('need', 'want')
+                 )''',
+            (
+                user_id,
+                month_start.isoformat(),
+                spending_end.isoformat()
+            )
+        ).fetchone()[0]
+
+        # Active schedules whose account is missing.
+        missing_account = conn.execute(
+            '''SELECT COUNT(*)
+               FROM recurring_transactions r
+               LEFT JOIN accounts a
+                 ON a.id = r.account_id AND a.user_id = r.user_id
+               WHERE r.user_id = ?
+                 AND r.is_active = 1
+                 AND a.id IS NULL''',
+            (user_id,)
+        ).fetchone()[0]
+
+        # Subscriptions not yet linked to a shared schedule.
+        unlinked_subscriptions = conn.execute(
+            '''SELECT COUNT(*)
+               FROM subscriptions
+               WHERE user_id = ?
+                 AND recurring_rule_id IS NULL''',
+            (user_id,)
+        ).fetchone()[0]
+
+        budgets = conn.execute(
+            '''SELECT budget_name, amount
+               FROM budgets
+               WHERE user_id = ?''',
+            (user_id,)
+        ).fetchall()
+
+        accounts = conn.execute(
+            '''SELECT account_name, balance
+               FROM accounts
+               WHERE user_id = ?''',
+            (user_id,)
+        ).fetchall()
+
+    invalid_budget_count = 0
+    for _name, amount in budgets:
+        try:
+            value = float(amount)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            invalid_budget_count += 1
+
+    negative_accounts = []
+    for name, balance in accounts:
+        try:
+            value = float(balance)
+            if math.isfinite(value) and value < 0:
+                negative_accounts.append(name)
+        except (TypeError, ValueError, OverflowError):
+            # A non-numeric balance is itself a data problem.
+            negative_accounts.append(name)
+
+    if unclassified:
+        issues.append({
+            "key": "unclassified_expenses",
+            "severity": "info",
+            "title": "Unclassified expenses this month",
+            "detail": (
+                f"{unclassified} expense record(s) this month have no "
+                "Need or Want classification. Classifying them makes the "
+                "Needs/Wants reflection more complete."
+            )
+        })
+
+    if missing_account:
+        issues.append({
+            "key": "schedules_missing_account",
+            "severity": "warning",
+            "title": "Active schedules with a missing account",
+            "detail": (
+                f"{missing_account} active schedule(s) reference an account "
+                "that no longer exists. Their expenses cannot be processed "
+                "until a valid account is assigned."
+            )
+        })
+
+    if unlinked_subscriptions:
+        issues.append({
+            "key": "unlinked_subscriptions",
+            "severity": "info",
+            "title": "Subscriptions needing schedule setup",
+            "detail": (
+                f"{unlinked_subscriptions} subscription(s) are not linked "
+                "to the shared scheduler and are excluded from scheduled "
+                "expense guidance until set up."
+            )
+        })
+
+    if invalid_budget_count:
+        issues.append({
+            "key": "invalid_budget_limits",
+            "severity": "warning",
+            "title": "Budgets with invalid limits",
+            "detail": (
+                f"{invalid_budget_count} budget(s) have a limit that is not "
+                "a positive number. Budget guidance is skipped for them "
+                "until the limit is corrected."
+            )
+        })
+
+    if negative_accounts:
+        shown = ", ".join(sorted(negative_accounts)[:5])
+        more = len(negative_accounts) - 5
+
+        detail = (
+            "The following account(s) have a negative or unreadable "
+            f"recorded balance: {shown}."
+        )
+        if more > 0:
+            detail += f" ({more} more not shown.)"
+
+        detail += (
+            " This can result from recorded spending exceeding recorded "
+            "income, or from missing income entries."
+        )
+
+        issues.append({
+            "key": "negative_account_balances",
+            "severity": "warning",
+            "title": "Accounts with a negative recorded balance",
+            "detail": detail
+        })
+
+    return {
+        "as_of": reference_date.isoformat(),
+        "issue_count": len(issues),
+        "issues": issues,
+        "limitation": (
+            "Highlights detectable data issues only. A clean report does "
+            "not prove your records are complete or correct. The app cannot "
+            "detect expenses or income you did not record."
+        )
+    }
+
 def get_budget_recommendations(user_id, reference_date=None):
     """
     Builds explainable recommendations for current calendar budgets.
