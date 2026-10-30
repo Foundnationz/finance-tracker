@@ -4877,10 +4877,11 @@ def get_budget_recommendations(user_id, reference_date=None):
 
 def show_budget_spending(user_id, budget_id):
     """
-    Shows a popup listing all transactions that count
-    toward the selected budget's progress.
+    Shows the transactions counted toward a budget's current period.
+
+    Uses the shared scrollable frame so wheel scrolling works over
+    cards and labels. Reads data only.
     """
-    # Use the same reference date for spending and period information.
     today = datetime.today().date()
 
     (
@@ -4898,34 +4899,64 @@ def show_budget_spending(user_id, budget_id):
     )
 
     if not budget_name:
-        messagebox.showerror("Error", "Budget not found.")
+        messagebox.showerror(
+            "Budget Not Found",
+            "This budget no longer exists.",
+            parent=root
+        )
         return
 
-    period_start, period_end, days_remaining = get_budget_period(
-        timeframe,
-        reference_date=today
-    )
+    try:
+        period_start, period_end, days_remaining = get_budget_period(
+            timeframe,
+            reference_date=today
+        )
+    except ValueError as error:
+        messagebox.showerror(
+            "Spending Breakdown Unavailable",
+            str(error),
+            parent=root
+        )
+        return
+
     final_day = period_end - timedelta(days=1)
 
-    sym      = get_currency(user_id)
-    over     = max(total_spent - budget_limit, 0)
+    sym = get_currency(user_id)
+    over = max(total_spent - budget_limit, 0)
     remaining = max(budget_limit - total_spent, 0)
-    progress = (total_spent / budget_limit * 100) if budget_limit else 0
+    progress = (
+        (total_spent / budget_limit) * 100
+        if budget_limit
+        else 0
+    )
 
     # ── Create popup ──────────────────────────────────────────
     popup = tk.Toplevel(root)
-    popup.title(f"📊 {budget_name} — Spending Breakdown")
-    popup.geometry("500x520")
-    popup.resizable(False, False)
+    popup.title(f"{budget_name} — Spending Breakdown")
+    popup.geometry("560x600")
+    popup.minsize(480, 420)
     popup.configure(bg="#f0f4f8")
     popup.transient(root)
-    popup.grab_set()
-    # Reserve the bottom controls before the expanding transaction list.
+
+    def close_popup():
+        popup.destroy()
+
+    popup.protocol("WM_DELETE_WINDOW", close_popup)
+    popup.bind("<Escape>", lambda event: close_popup())
+
+    # Reserve bottom controls before the expanding list.
     btn_bar = tk.Frame(popup, bg="#f0f4f8", pady=10)
     btn_bar.pack(side="bottom", fill="x", padx=15)
 
+    make_button(
+        btn_bar,
+        "Close",
+        close_popup,
+        color="#718096",
+        width=12
+    ).pack()
+
     # ── Header ────────────────────────────────────────────────
-    # Colour changes based on severity
     if total_spent > budget_limit:
         header_color = "#e53e3e"
         status_text = "BUDGET EXCEEDED"
@@ -4944,10 +4975,12 @@ def show_budget_spending(user_id, budget_id):
 
     tk.Label(
         header,
-        text=f"📊 {budget_name}",
+        text=budget_name,
         font=("Segoe UI", 14, "bold"),
-        bg=header_color, fg="white"
-    ).pack()
+        bg=header_color,
+        fg="white",
+        wraplength=500
+    ).pack(padx=10)
 
     tk.Label(
         header,
@@ -4956,38 +4989,22 @@ def show_budget_spending(user_id, budget_id):
             f"{status_text}\n"
             f"Calendar period: {period_start.isoformat()} "
             f"→ {final_day.isoformat()}\n"
-            f"Recorded spending through: {today.isoformat()}"
+            f"Recorded spending counted through: {today.isoformat()}"
         ),
         font=("Segoe UI", 9),
         bg=header_color,
         fg="white",
-        wraplength=460,
+        wraplength=500,
         justify="center"
     ).pack(padx=10)
 
-    # ── Summary strip ─────────────────────────────────────────
+    # ── Summary ───────────────────────────────────────────────
     summary = tk.Frame(popup, bg="white", relief="solid", bd=1)
     summary.pack(fill="x", padx=15, pady=8)
 
     summary_row = tk.Frame(summary, bg="white")
-    summary_row.pack(pady=8)
+    summary_row.pack(fill="x", pady=8)
 
-    # Limit column
-    lim_col = tk.Frame(summary_row, bg="white")
-    lim_col.pack(side="left", expand=True)
-    tk.Label(lim_col, text="LIMIT",
-             font=("Segoe UI", 8), bg="white", fg="#718096").pack()
-    tk.Label(lim_col, text=f"{sym}{budget_limit:,.2f}",
-             font=("Segoe UI", 11, "bold"), bg="white", fg="#2b6cb0").pack()
-
-    tk.Frame(summary_row, bg="#e2e8f0", width=1).pack(
-        side="left", fill="y", padx=10)
-
-    # Spent column
-    spent_col = tk.Frame(summary_row, bg="white")
-    spent_col.pack(side="left", expand=True)
-    tk.Label(spent_col, text="SPENT",
-             font=("Segoe UI", 8), bg="white", fg="#718096").pack()
     spent_color = (
         "#e53e3e"
         if total_spent > budget_limit
@@ -4995,27 +5012,48 @@ def show_budget_spending(user_id, budget_id):
         if progress >= 80
         else "#276749"
     )
-    tk.Label(spent_col, text=f"{sym}{total_spent:,.2f}",
-             font=("Segoe UI", 11, "bold"), bg="white", fg=spent_color).pack()
 
-    tk.Frame(summary_row, bg="#e2e8f0", width=1).pack(
-        side="left", fill="y", padx=10)
+    summary_columns = [
+        ("LIMIT", f"{sym}{budget_limit:,.2f}", "#2b6cb0"),
+        ("SPENT", f"{sym}{total_spent:,.2f}", spent_color)
+    ]
 
-    # Over / Remaining column
-    third_col = tk.Frame(summary_row, bg="white")
-    third_col.pack(side="left", expand=True)
     if total_spent > budget_limit:
-        tk.Label(third_col, text="OVER BY",
-                 font=("Segoe UI", 8), bg="white", fg="#718096").pack()
-        tk.Label(third_col, text=f"{sym}{over:,.2f}",
-                 font=("Segoe UI", 11, "bold"), bg="white", fg="#e53e3e").pack()
+        summary_columns.append(
+            ("OVER BY", f"{sym}{over:,.2f}", "#e53e3e")
+        )
     else:
-        tk.Label(third_col, text="REMAINING",
-                 font=("Segoe UI", 8), bg="white", fg="#718096").pack()
-        tk.Label(third_col, text=f"{sym}{remaining:,.2f}",
-                 font=("Segoe UI", 11, "bold"), bg="white", fg="#276749").pack()
+        summary_columns.append(
+            ("REMAINING", f"{sym}{remaining:,.2f}", "#276749")
+        )
 
-    # ── Usage and transaction count ──────────────────────────
+    for index, (label, value, colour) in enumerate(summary_columns):
+        if index:
+            tk.Frame(
+                summary_row,
+                bg="#e2e8f0",
+                width=1
+            ).pack(side="left", fill="y", padx=10)
+
+        column = tk.Frame(summary_row, bg="white")
+        column.pack(side="left", expand=True)
+
+        tk.Label(
+            column,
+            text=label,
+            font=("Segoe UI", 8),
+            bg="white",
+            fg="#718096"
+        ).pack()
+
+        tk.Label(
+            column,
+            text=value,
+            font=("Segoe UI", 11, "bold"),
+            bg="white",
+            fg=colour
+        ).pack()
+
     tk.Label(
         popup,
         text=(
@@ -5027,129 +5065,110 @@ def show_budget_spending(user_id, budget_id):
         fg="#718096"
     ).pack(anchor="w", padx=15, pady=(0, 4))
 
-    # ── Scrollable transaction list ───────────────────────────
-    # Create a scrollable frame inside the popup
-    scroll_outer = tk.Frame(popup, bg="#f0f4f8")
-    scroll_outer.pack(fill="both", expand=True, padx=15)
+    # ── Shared scrollable list ────────────────────────────────
+    scroll_frame = make_scrollable_frame(popup)
 
-    canvas = tk.Canvas(scroll_outer, bg="#f0f4f8", highlightthickness=0)
-    scrollbar = ttk.Scrollbar(
-        scroll_outer, orient="vertical", command=canvas.yview)
-    scroll_frame = tk.Frame(canvas, bg="#f0f4f8")
-
-    scroll_frame.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-    )
-    canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    def _on_mousewheel(event):
-        try:
-            if not canvas.winfo_exists():
-                return
-
-            direction = int(-1 * (event.delta / 120))
-            if direction == 0:
-                direction = -1 if event.delta > 0 else 1
-
-            canvas.yview_scroll(direction, "units")
-
-        except tk.TclError:
-            return
-
-    # Local scrolling only. Child cards can still be scrolled
-    # using the visible scrollbar.
-    canvas.bind("<MouseWheel>", _on_mousewheel)
-    scroll_frame.bind("<MouseWheel>", _on_mousewheel)
-
-    # ── Display each transaction ──────────────────────────────
     if not transactions:
         tk.Label(
             scroll_frame,
-            text="No transactions found in this budget period.",
+            text=(
+                "No matching transactions were found for this period. "
+                "This does not prove no spending occurred."
+            ),
             font=("Segoe UI", 10),
-            bg="#f0f4f8", fg="#718096"
-        ).pack(pady=20)
+            bg="#f0f4f8",
+            fg="#718096",
+            wraplength=480,
+            justify="left"
+        ).pack(anchor="w", padx=15, pady=20)
     else:
         for tx in transactions:
-            (tx_category, tx_amount, tx_date,
-             tx_time, tx_notes, tx_reference, tx_necessity) = tx
+            (
+                tx_category,
+                tx_amount,
+                tx_date,
+                tx_time,
+                tx_notes,
+                tx_reference,
+                tx_necessity
+            ) = tx
 
-            tx_notes     = tx_notes     or ""
+            tx_notes = tx_notes or ""
             tx_reference = tx_reference or ""
-            tx_necessity = tx_necessity or "unset"
 
-            # Card for each transaction
-            tx_card = tk.Frame(scroll_frame, bg="white", relief="solid", bd=1)
-            tx_card.pack(fill="x", pady=3)
+            card = tk.Frame(
+                scroll_frame,
+                bg="white",
+                relief="solid",
+                bd=1
+            )
+            card.pack(fill="x", padx=15, pady=3)
 
-            # Top row — date, category, amount
-            top = tk.Frame(tx_card, bg="white")
+            top = tk.Frame(card, bg="white")
             top.pack(fill="x", padx=8, pady=(6, 2))
 
             tk.Label(
                 top,
                 text=f"{tx_date}  {tx_time}  |  {tx_category}",
                 font=("Segoe UI", 9, "bold"),
-                bg="white", fg="#2d3748"
+                bg="white",
+                fg="#2d3748",
+                wraplength=320,
+                justify="left"
             ).pack(side="left")
 
             tk.Label(
                 top,
                 text=f"-{sym}{tx_amount:,.2f}",
                 font=("Segoe UI", 9, "bold"),
-                bg="white", fg="#e53e3e"
+                bg="white",
+                fg="#e53e3e"
             ).pack(side="right")
 
-            # Necessity badge — only for expenses
             if tx_necessity in ("need", "want"):
-                nec_bg   = "#e9d8fd" if tx_necessity == "want" else "#c6f6d5"
-                nec_text = "🛍️ Want" if tx_necessity == "want" else "✅ Need"
                 tk.Label(
-                    top, text=nec_text,
+                    top,
+                    text="Want" if tx_necessity == "want" else "Need",
                     font=("Segoe UI", 7, "bold"),
-                    bg=nec_bg, fg="#2d3748",
-                    relief="solid", bd=1, padx=3, pady=1
+                    bg=(
+                        "#e9d8fd"
+                        if tx_necessity == "want"
+                        else "#c6f6d5"
+                    ),
+                    fg="#2d3748",
+                    relief="solid",
+                    bd=1,
+                    padx=3,
+                    pady=1
                 ).pack(side="right", padx=5)
 
-            # Notes row — only if notes exist
             if tx_notes:
                 tk.Label(
-                    tx_card,
-                    text=f"📝  {tx_notes}",
+                    card,
+                    text=f"Notes: {tx_notes}",
                     font=("Segoe UI", 8, "italic"),
-                    bg="white", fg="#4a5568",
-                    wraplength=420, justify="left"
+                    bg="white",
+                    fg="#4a5568",
+                    wraplength=460,
+                    justify="left"
                 ).pack(anchor="w", padx=8, pady=1)
 
-            # Reference row — only if reference exists
             if tx_reference:
                 tk.Label(
-                    tx_card,
-                    text=f"🔖  Ref: {tx_reference}",
+                    card,
+                    text=f"Reference: {tx_reference}",
                     font=("Segoe UI", 8),
-                    bg="white", fg="#4a5568"
+                    bg="white",
+                    fg="#4a5568",
+                    wraplength=460,
+                    justify="left"
                 ).pack(anchor="w", padx=8, pady=(1, 4))
 
-            # Bottom padding
-            tk.Frame(tx_card, bg="white", height=4).pack()
+            tk.Frame(card, bg="white", height=4).pack()
 
-    # ── Close button ──────────────────────────────────────────
-
-    def close_popup():
-        popup.destroy()
-
-    # Use the same cleanup if the user clicks the window's X button.
-    popup.protocol("WM_DELETE_WINDOW", close_popup)
-
-    make_button(
-        btn_bar, "✖ Close",
-        close_popup, color="#718096", width=12
-    ).pack()
+    # Take the modal grab after the window is visible.
+    popup.wait_visibility()
+    popup.grab_set()
 
 def get_budget_transactions(budget_id, user_id, reference_date=None):
     """
