@@ -3825,11 +3825,11 @@ def get_data_quality_report(user_id, reference_date=None):
         issues.append({
             "key": "schedules_missing_account",
             "severity": "warning",
-            "title": "Active schedules with a missing account",
+            "title": "Active schedules without a valid account",
             "detail": (
-                f"{missing_account} active schedule(s) reference an account "
-                "that no longer exists. Their expenses cannot be processed "
-                "until a valid account is assigned."
+                f"{missing_account} active schedule(s) have an unassigned, "
+                "missing, or invalid account link. Review the schedules "
+                "and assign a valid account before processing."
             )
         })
 
