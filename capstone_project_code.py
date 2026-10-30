@@ -2490,22 +2490,83 @@ def show_budgets(user_id):
 
 def confirm_delete_budget(user_id, budget_id, budget_name):
     """
-    Confirmation dialog before deleting a budget.
-    Separated from show_budgets to keep it clean.
+    Deletes a budget and its dependent monthly settings history.
+
+    Past transactions and account balances remain unchanged.
     """
+    # Read the current record instead of relying on a potentially
+    # outdated name supplied by the budget card.
+    with get_db() as conn:
+        row = conn.execute(
+            '''SELECT budget_name
+               FROM budgets
+               WHERE id = ? AND user_id = ?''',
+            (budget_id, user_id)
+        ).fetchone()
+
+    if row is None:
+        messagebox.showinfo(
+            "Budget Not Found",
+            "This budget no longer exists. The list will refresh.",
+            parent=root
+        )
+        show_budgets(user_id)
+        return
+
+    current_name = row[0]
+
     confirmed = messagebox.askyesno(
-        "Confirm Delete",
-        f"Delete budget '{budget_name}'?\n\nThis cannot be undone."
+        "Permanently Delete Budget",
+        (
+            f"Delete budget '{current_name}'?\n\n"
+            "Its recorded monthly settings history will also be "
+            "permanently deleted. It will no longer appear in the "
+            "historical budget review.\n\n"
+            "Past transactions and account balances will not change.\n"
+            "Transactions remain available in normal Transaction History.\n\n"
+            "This cannot be undone."
+        ),
+        parent=root
     )
-    if confirmed:
+
+    if not confirmed:
+        return
+
+    try:
         with get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM budgets WHERE id = ? AND user_id = ?",
+            conn.execute("BEGIN IMMEDIATE")
+
+            cursor = conn.execute(
+                '''DELETE FROM budgets
+                   WHERE id = ? AND user_id = ?''',
                 (budget_id, user_id)
             )
+            deleted_count = cursor.rowcount
+
+            # With foreign keys enabled, ON DELETE CASCADE removes
+            # this budget's monthly history in the same transaction.
             conn.commit()
-        show_budgets(user_id)
+
+    except sqlite3.Error as error:
+        messagebox.showerror(
+            "Budget Deletion Failed",
+            (
+                "The deletion did not complete. Uncommitted database "
+                "changes from this attempt were rolled back.\n\n"
+                f"Details: {error}"
+            ),
+            parent=root
+        )
+        return
+
+    if deleted_count == 0:
+        messagebox.showinfo(
+            "Budget Not Found",
+            "The budget was already removed. The list will refresh.",
+            parent=root
+        )
+
+    show_budgets(user_id)
 
 
 def show_edit_budget(user_id, budget_id):

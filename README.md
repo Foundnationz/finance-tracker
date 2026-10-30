@@ -133,6 +133,45 @@ Budgets use calendar periods:
 
 ---
 
+## 🗂️ Monthly Budget Settings History
+
+Monthly budgets record month-level settings consisting of:
+
+- The effective calendar month.
+- The budget limit.
+- The expense-category scope.
+
+Changes apply to the current calendar month. Saving again in the same
+month replaces that month's settings rather than creating an edit-by-edit
+audit log.
+
+Settings carry forward until a later recorded change. Earlier months
+without recorded settings remain unknown; the app does not reconstruct
+them from current values.
+
+The Dashboard reviews the three most recent completed months using each
+month's applicable recorded settings. A review suggestion is triggered
+when at least two months with known settings are above their applicable
+limits. This threshold is an application rule, not a financial standard.
+
+Each month with known settings provides a read-only expense drill-down.
+It uses that month's recorded category scope, rather than the budget's
+current category.
+
+### Boundaries
+
+- History currently applies to monthly budgets only.
+- Monthly budgets with history cannot be changed to another timeframe.
+- Historical spending is calculated from transactions as they exist now.
+  Editing or deleting transactions can change earlier totals.
+- Months without recorded settings are excluded from historical-limit
+  comparisons, not treated as zero spending.
+- Deleting a budget permanently deletes its settings history but preserves
+  transactions and account balances.
+- Deleted budgets are not archived for later review.
+
+---
+
 ## 💡 Financial Insights and Recommendations
 
 The Dashboard includes a knowledge-based recommendation module.

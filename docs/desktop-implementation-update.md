@@ -479,7 +479,9 @@ Potential future improvements include:
 - Explicit money storage using integer minor units or an appropriate
   exact-money design.
 - Custom-date and pay-cycle budgeting.
-- Historical budget-limit versioning.
+- Extending monthly budget history beyond month-level settings, if an
+  edit-by-edit audit log, archived budgets, or additional timeframes
+  become requirements.
 - Reliable funded-amount storage and target dates for wishlist planning.
 - Filtered navigation from recommendations to supporting transactions.
 - Consolidated data-quality guidance.
@@ -491,6 +493,38 @@ integration, and automatic impulse-purchase detection remain separate
 research or development possibilities—not completed features.
 
 ---
+
+### Additional Monthly Budget History Implementation
+
+The desktop implementation now records monthly budget limits and category
+scope by effective month.
+
+Existing valid monthly budgets receive a baseline for the current month
+when history tracking is introduced. Earlier months remain unknown.
+New monthly budgets record their initial settings when saved.
+
+Current-month edits replace that month's settings while preserving earlier
+recorded months. Applicable settings carry forward until superseded.
+
+The historical review uses the applicable recorded limit and category
+for each of the three most recent completed months. Unknown months are
+excluded from comparison. At least two known months above their applicable
+limits trigger a review suggestion.
+
+A read-only historical expense popup lists transactions matching the
+applicable recorded category scope. Its data is read when opened and can
+differ from an earlier Dashboard rendering if records have since changed.
+
+Deleting a budget also deletes its monthly settings history. Transactions
+and account balances are preserved.
+
+Development checks covered effective-month selection, carry-forward,
+unknown-history handling, category-scope changes, agreement between
+review and drill-down totals, and dependent-history deletion.
+
+This history is month-level settings storage, not an immutable edit log.
+It does not reconstruct unrecorded earlier limits or establish that the
+user's historical transaction records are complete.
 
 ## 13. Summary
 
