@@ -374,6 +374,14 @@ You do not need to create the database manually.
 Screenshots should use demonstration data rather than real personal or
 financial information. Screenshots may lag behind interface changes.
 
+### Add Transaction
+
+![Add Transaction](assets/screenshots/add_transaction.png)
+
+### Subscriptions
+
+![Subscriptions](assets/screenshots/subscriptions.png)
+
 ### Welcome Screen
 
 ![Welcome Screen](assets/screenshots/welcome.png)
