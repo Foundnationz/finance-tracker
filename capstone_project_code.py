@@ -12761,6 +12761,237 @@ def render_data_quality_panel(parent, user_id, reference_date=None):
         justify="left"
     ).pack(anchor="w", padx=12, pady=(6, 12))
 
+def render_historical_budget_review(
+    parent,
+    user_id,
+    reference_date=None
+):
+    """
+    Displays completed-month spending against current monthly limits.
+
+    Reads data only. Does not change budgets or transactions.
+    """
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    section = tk.Frame(
+        parent,
+        bg="#f7fafc",
+        relief="solid",
+        bd=1
+    )
+    section.pack(fill="x", pady=10)
+
+    tk.Label(
+        section,
+        text="Past Spending vs Current Monthly Limits",
+        font=("Segoe UI", 12, "bold"),
+        bg="#f7fafc",
+        fg="#2c5282"
+    ).pack(anchor="w", padx=12, pady=(10, 4))
+
+    try:
+        report = get_historical_budget_review(
+            user_id,
+            reference_date=reference_date
+        )
+    except (sqlite3.Error, ValueError, OverflowError) as error:
+        tk.Label(
+            section,
+            text=f"Historical budget review is unavailable: {error}",
+            font=("Segoe UI", 9),
+            bg="#f7fafc",
+            fg="#c53030",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+        return
+
+    sym = get_currency(user_id)
+    trigger_count = report["trigger_month_count"]
+
+    tk.Label(
+        section,
+        text=(
+            f"Completed months reviewed: "
+            f"{report['reviewed_period_start']} "
+            f"→ {report['reviewed_period_last_day']}\n"
+            f"Monthly budgets found: {report['monthly_budget_count']}\n"
+            "Independent of the report month selected above."
+        ),
+        font=("Segoe UI", 9),
+        bg="#f7fafc",
+        fg="#4a5568",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 6))
+
+    tk.Label(
+        section,
+        text=(
+            "Past recorded spending is compared with each budget's "
+            "CURRENT limit, because historical limits are not stored. "
+            f"A review is suggested when at least {trigger_count} of the "
+            "three months were above that current limit. This is an "
+            "application rule, not a financial standard."
+        ),
+        font=("Segoe UI", 8, "italic"),
+        bg="#f7fafc",
+        fg="#718096",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    if report["notices"]:
+        notice_frame = tk.Frame(section, bg="#fffbeb")
+        notice_frame.pack(fill="x", padx=12, pady=(0, 8))
+
+        tk.Label(
+            notice_frame,
+            text="Excluded records and budgets",
+            font=("Segoe UI", 9, "bold"),
+            bg="#fffbeb",
+            fg="#975a16"
+        ).pack(anchor="w", padx=8, pady=(6, 3))
+
+        for notice in report["notices"]:
+            tk.Label(
+                notice_frame,
+                text=f"• {notice}",
+                font=("Segoe UI", 9),
+                bg="#fffbeb",
+                fg="#975a16",
+                wraplength=560,
+                justify="left"
+            ).pack(anchor="w", padx=8, pady=(0, 5))
+
+    if not report["reviews"]:
+        tk.Label(
+            section,
+            text=(
+                "No monthly budgets with a valid current limit were "
+                "available to review. Weekly, daily, and yearly budgets "
+                "are not included in this review."
+            ),
+            font=("Segoe UI", 10),
+            bg="#f7fafc",
+            fg="#4a5568",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+        return
+
+    for review in report["reviews"]:
+        card = tk.Frame(section, bg="white", relief="solid", bd=1)
+        card.pack(fill="x", padx=12, pady=5)
+
+        highlight = (
+            "#c05621"
+            if review["review_recommended"]
+            else "#2d3748"
+        )
+
+        tk.Label(
+            card,
+            text=review["name"],
+            font=("Segoe UI", 11, "bold"),
+            bg="white",
+            fg=highlight,
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(10, 2))
+
+        tk.Label(
+            card,
+            text=(
+                f"Category: {review['category']}\n"
+                f"Current monthly limit: "
+                f"{sym}{review['current_limit']:,.2f}\n"
+                f"Months above the current limit: "
+                f"{review['months_above_current_limit']} of 3"
+            ),
+            font=("Segoe UI", 10),
+            bg="white",
+            fg="#4a5568",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(0, 6))
+
+        for month in review["months"]:
+            if not month["has_recorded_expenses"]:
+                month_text = (
+                    f"{month['period_start']} → "
+                    f"{month['period_last_day']}\n"
+                    "No recorded expenses matched this budget. "
+                    "This does not prove no spending occurred."
+                )
+                month_color = "#718096"
+
+            else:
+                difference = month["difference_from_current_limit"]
+
+                if month["above_current_limit"]:
+                    comparison = (
+                        f"{sym}{difference:,.2f} above the current limit"
+                    )
+                    month_color = "#c05621"
+
+                elif difference == 0:
+                    comparison = "Exactly at the current limit"
+                    month_color = "#975a16"
+
+                else:
+                    comparison = (
+                        f"{sym}{abs(difference):,.2f} below the current limit"
+                    )
+                    month_color = "#276749"
+
+                month_text = (
+                    f"{month['period_start']} → "
+                    f"{month['period_last_day']}\n"
+                    f"Recorded spending: {sym}{month['spent']:,.2f} "
+                    f"({month['valid_entry_count']} entries)\n"
+                    f"{comparison}"
+                )
+
+            tk.Label(
+                card,
+                text=month_text,
+                font=("Segoe UI", 9),
+                bg="white",
+                fg=month_color,
+                wraplength=570,
+                justify="left"
+            ).pack(anchor="w", padx=10, pady=(0, 5))
+
+        tk.Label(
+            card,
+            text=review["suggestion"],
+            font=("Segoe UI", 9),
+            bg="white",
+            fg=highlight,
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(4, 8))
+
+        make_button(
+            card,
+            "Review Budgets",
+            lambda: show_budgets(user_id),
+            color="#3182ce",
+            width=18
+        ).pack(anchor="w", padx=10, pady=(0, 10))
+
+    tk.Label(
+        section,
+        text=report["limitation"],
+        font=("Segoe UI", 8, "italic"),
+        bg="#f7fafc",
+        fg="#718096",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(4, 12))
+
 # ============================================================
 # DASHBOARD SCREEN
 # ============================================================
@@ -12833,7 +13064,7 @@ def show_dashboard(user_id):
         for widget in insights_frame.winfo_children():
             widget.destroy()
 
-        # All current-guidance sections use the same reference date.
+        # All current-guidance sections share one reference date.
         today = datetime.today().date()
 
         render_data_quality_panel(
@@ -12855,6 +13086,12 @@ def show_dashboard(user_id):
         )
 
         render_subscription_cost_review(
+            insights_frame,
+            user_id,
+            reference_date=today
+        )
+
+        render_historical_budget_review(
             insights_frame,
             user_id,
             reference_date=today
