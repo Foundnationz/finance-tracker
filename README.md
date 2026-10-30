@@ -371,16 +371,52 @@ You do not need to create the database manually.
 
 ## 🖥️ Screenshots
 
-Screenshots should use demonstration data rather than real personal or
-financial information. Screenshots may lag behind interface changes.
+The screenshots below use fictional demonstration data.
+Some views show only a representative portion of a scrollable screen.
+
+### Dashboard — Overview
+
+Selected-month totals, daily income/expense charts, and transaction records.
+
+![Dashboard Overview](assets/screenshots/dashboard.png)
 
 ### Add Transaction
 
+Record income or expenses with an account, category, notes, references,
+tags, and expense classification.
+
 ![Add Transaction](assets/screenshots/add_transaction.png)
 
-### Subscriptions
+### Budget Tracking
+
+Calendar-based budgets with recorded spending, remaining or exceeded
+amounts, and access to contributing transactions.
+
+![Budgets](assets/screenshots/budgets.png)
+
+### Subscription Management
+
+Linked subscription schedules with billing days, account information,
+next scheduled dates, and active/paused controls.
 
 ![Subscriptions](assets/screenshots/subscriptions.png)
+
+### Dashboard — Period Insights
+
+Analysis tied to the selected report month, including spending comparisons,
+Needs/Wants reflection, and repeated spending review.
+
+![Dashboard Period Insights](assets/screenshots/dashboard_period_insights.png)
+
+### Dashboard — Current Planning
+
+Current-date guidance for budget allowances, scheduled expenses,
+subscription commitments, data quality, and historical budget review.
+
+![Dashboard Current Planning](assets/screenshots/dashboard_current_planning.png)
+
+<details>
+<summary>Additional screenshots: Welcome, Main Menu, and Badges</summary>
 
 ### Welcome Screen
 
@@ -390,25 +426,14 @@ financial information. Screenshots may lag behind interface changes.
 
 ![Main Menu](assets/screenshots/main_menu.png)
 
-### Budget Tracking
-
-![Budgets](assets/screenshots/budgets.png)
-
-### Dashboard — Overview
-
-![Dashboard Overview](assets/screenshots/dashboard.png)
-
-### Dashboard — Period Insights
-
-![Dashboard Period Insights](assets/screenshots/dashboard_period_insights.png)
-
-### Dashboard — Current Planning
-
-![Dashboard Current Planning](assets/screenshots/dashboard_current_planning.png)
-
 ### Badges
 
 ![Badges](assets/screenshots/badges.png)
+
+</details>
+
+---
+
 
 ---
 
