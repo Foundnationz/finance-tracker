@@ -526,6 +526,46 @@ This history is month-level settings storage, not an immutable edit log.
 It does not reconstruct unrecorded earlier limits or establish that the
 user's historical transaction records are complete.
 
+### Dashboard Layout and Scrolling Refinements
+
+The Dashboard was reorganised into three tabs:
+
+- Overview: selected-month recorded totals, charts, and transaction table.
+- Period Insights: category comparison, Needs/Wants reflection, and
+  repeated spending review.
+- Current Planning: data-quality notices, budget allowances, upcoming
+  expenses, subscription review, and historical monthly budget review.
+
+Report selectors and bottom navigation remain outside the scrolling areas.
+Current Planning is labelled independently of the selected report month.
+
+The line chart now aggregates transactions into daily totals rather than
+plotting each transaction separately. This avoids vertical segments caused
+by several transactions sharing the same date.
+
+Days without entries for a series are not explicitly added as zero-value
+points. The chart connects available daily points and should be interpreted
+accordingly.
+
+The pie chart represents the split between recorded income and expenses,
+not a savings rate or a financial-health assessment.
+
+The shared scrolling helper was updated to:
+
+- Resize its inner content to follow the canvas width.
+- Use local event handling rather than application-wide mouse-wheel bindings.
+- Allow page scrolling while the pointer is over embedded charts and
+  decorative canvases.
+- Preserve native scrolling for widgets such as text boxes and tables.
+- Clean up its periodic child-binding refresh when destroyed.
+
+Budget spending, recurring history, and subscription expense history
+windows were migrated to this shared helper. They provide fixed Close
+controls, resizing, and Escape-key closing.
+
+The wishlist contribution planner was deferred. The wishlist remains a
+virtual progress tracker without target-date contribution recommendations.
+
 ## 13. Summary
 
 The post-submission desktop work expands the original prototype with

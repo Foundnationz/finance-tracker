@@ -246,6 +246,53 @@ reported user testing.
 
 ---
 
+## 🖥️ Dashboard Layout
+
+The Dashboard separates financial reporting and guidance into three tabs.
+
+| Tab | Contents |
+|---|---|
+| Overview | Selected-month recorded totals, charts, and transaction table |
+| Period Insights | Category spending comparison, Needs/Wants reflection, and repeated spending review |
+| Current Planning | Data-quality review, current budget allowances, upcoming expenses, subscription costs, and historical monthly budget review |
+
+### Report Selection and Refresh
+
+- Month and year controls remain outside the scrolling content.
+- Overview and Period Insights follow the loaded report selection.
+- Changing the selection requires clicking Refresh Dashboard.
+- Current Planning uses today's date and each section's stated time window,
+  independently of the selected report month.
+- Back to Menu and Refresh Dashboard remain in a fixed bottom bar.
+- Each tab has a separate scrollable area.
+
+### Charts
+
+- The pie chart shows the income/expense split in the selected records.
+  It is not a savings-rate chart or an assessment of financial health.
+- The line chart aggregates transactions into daily income and expense totals.
+- Multiple transactions on the same date are combined into one daily point
+  for each applicable series.
+- Days without entries for a series are not explicitly plotted as zero.
+  Lines connect the available daily points.
+- A series with records on only one date appears as a single point.
+- Overview includes records dated in the selected month, including
+  future-dated records if present. Current-period insight calculations
+  exclude future dates according to their stated rules.
+
+### History Windows
+
+Budget spending, recurring history, and subscription expense history use
+the shared scrollable-frame helper.
+
+These windows support scrolling over cards and labels, resizing, and
+closing through the Close button, Escape, or the window close control.
+
+Subscription history displays recorded expenses, not verified payments
+to a provider.
+
+---
+
 ## 🛠️ Built With
 
 | Tool | Purpose |
@@ -468,8 +515,8 @@ of additional edge cases remain areas for improvement.
 - Budgets use calendar periods only; pay-cycle and custom-date periods
   are not implemented.
 - Currency selection changes display settings without exchange-rate conversion.
-- Wishlist funding is a virtual goal tracker. It does not reserve money,
-  support target dates, or calculate suggested contribution plans.
+- Wishlist funding is a virtual goal tracker. It does not reserve or
+  transfer money, support target dates, or calculate contribution plans.
 - Dashboard recommendations use explicit rules, not AI models or
   case-based reasoning. Their financial or behavioural effectiveness
   has not been established through a dedicated user study.
