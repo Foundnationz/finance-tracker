@@ -4112,6 +4112,118 @@ def record_monthly_budget_settings(
 
     return effective_month.isoformat()
 
+def get_applicable_monthly_budget_settings(
+    conn,
+    user_id,
+    budget_id,
+    month_start_text
+):
+    """
+    Finds the latest recorded monthly settings effective on or
+    before the requested month.
+
+    Uses the caller's connection to support a shared read snapshot.
+
+    Returns:
+        A settings dictionary, or None if no historical settings
+        are known for that month.
+
+    Does not fall back to the budget's current settings.
+    Does not modify records or commit.
+    """
+    import math
+
+    try:
+        month_start = datetime.strptime(
+            month_start_text, "%Y-%m-%d"
+        ).date()
+
+        if (
+            month_start.day != 1
+            or month_start.isoformat() != month_start_text
+        ):
+            raise ValueError
+
+    except (TypeError, ValueError):
+        raise ValueError(
+            "The requested month must use YYYY-MM-01."
+        ) from None
+
+    # Verify ownership before looking up its history.
+    budget = conn.execute(
+        '''SELECT id
+           FROM budgets
+           WHERE id = ? AND user_id = ?''',
+        (budget_id, user_id)
+    ).fetchone()
+
+    if budget is None:
+        raise ValueError(
+            "The budget could not be found for this user."
+        )
+
+    history = conn.execute(
+        '''SELECT effective_month, amount, category
+           FROM budget_monthly_history
+           WHERE user_id = ?
+             AND budget_id = ?
+             AND effective_month <= ?
+           ORDER BY effective_month DESC
+           LIMIT 1''',
+        (user_id, budget_id, month_start.isoformat())
+    ).fetchone()
+
+    if history is None:
+        return None
+
+    effective_month, stored_amount, category = history
+
+    # Validate the selected snapshot instead of silently falling
+    # back to a different snapshot if it is invalid.
+    try:
+        effective_date = datetime.strptime(
+            effective_month, "%Y-%m-%d"
+        ).date()
+
+        if (
+            effective_date.day != 1
+            or effective_date.isoformat() != effective_month
+        ):
+            raise ValueError
+
+        amount = float(stored_amount)
+
+        if not math.isfinite(amount) or amount <= 0:
+            raise ValueError
+
+        if not isinstance(category, str) or not category.strip():
+            raise ValueError
+
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(
+            "The applicable monthly budget history record contains "
+            "invalid settings. It must be reviewed before comparison."
+        ) from None
+
+    # Preserve the saved category text for exact category matching.
+    # Normalise only when checking the special all-expenses option.
+    category_key = category.strip().casefold()
+
+    includes_all = category_key in (
+        "general",
+        ALL_EXPENSE_CATEGORIES.casefold()
+    )
+
+    return {
+        "budget_id": budget_id,
+        "requested_month": month_start.isoformat(),
+        "effective_month": effective_month,
+        "amount": amount,
+        "category": category,
+        "includes_all_categories": includes_all,
+        "carried_forward": effective_date < month_start
+    }
+
 def get_budget_month_expenses(user_id, budget_id, month_start_text):
     """
     Returns the expenses used for one month of the historical review.
