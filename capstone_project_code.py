@@ -3891,6 +3891,192 @@ def get_data_quality_report(user_id, reference_date=None):
         )
     }
 
+def get_historical_budget_review(user_id, reference_date=None):
+    """
+    Reviews three completed months against current monthly budget limits.
+
+    Does not reconstruct historical limits or infer affordability.
+    Reads data only.
+    """
+    import math
+    from decimal import Decimal
+
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    current_month_start = reference_date.replace(day=1)
+
+    # Oldest month first, ending immediately before the current month.
+    periods = []
+
+    for months_back in (3, 2, 1):
+        start = current_month_start - relativedelta(months=months_back)
+        end = start + relativedelta(months=1)
+        periods.append((start, end))
+
+    reviews = []
+    notices = []
+
+    with get_db() as conn:
+        # All budget and transaction reads use one database snapshot.
+        conn.execute("BEGIN")
+
+        budgets = conn.execute(
+            '''SELECT id, budget_name, category, amount
+               FROM budgets
+               WHERE user_id = ? AND timeframe = 'Monthly'
+               ORDER BY budget_name COLLATE NOCASE, id''',
+            (user_id,)
+        ).fetchall()
+
+        rows = conn.execute(
+            '''SELECT category, amount, date
+               FROM transactions
+               WHERE user_id = ?
+                 AND type = 'expense'
+                 AND date >= ?
+                 AND date < ?''',
+            (
+                user_id,
+                periods[0][0].isoformat(),
+                current_month_start.isoformat()
+            )
+        ).fetchall()
+
+    valid_expenses = []
+    invalid_amount_count = 0
+
+    for category, amount, tx_date in rows:
+        try:
+            numeric_amount = float(amount)
+
+            if (
+                not math.isfinite(numeric_amount)
+                or numeric_amount < 0
+            ):
+                raise ValueError
+
+            valid_expenses.append(
+                (category, Decimal(str(amount)), tx_date)
+            )
+
+        except (TypeError, ValueError, OverflowError):
+            invalid_amount_count += 1
+
+    if invalid_amount_count:
+        notices.append(
+            f"{invalid_amount_count} expense record(s) with invalid "
+            "amounts were excluded from the reviewed date range."
+        )
+
+    for budget_id, name, category, stored_limit in budgets:
+        try:
+            numeric_limit = float(stored_limit)
+
+            if (
+                not math.isfinite(numeric_limit)
+                or numeric_limit <= 0
+            ):
+                raise ValueError
+
+            current_limit = Decimal(str(stored_limit))
+
+        except (TypeError, ValueError, OverflowError):
+            notices.append(
+                f"Budget '{name}' was excluded because its current "
+                "limit is not a finite positive amount."
+            )
+            continue
+
+        category_key = (category or "").strip().casefold()
+        includes_all = category_key in (
+            "general",
+            ALL_EXPENSE_CATEGORIES.casefold()
+        )
+
+        month_results = []
+        months_above = 0
+
+        for start, end in periods:
+            start_text = start.isoformat()
+            end_text = end.isoformat()
+
+            matching = [
+                amount
+                for tx_category, amount, tx_date in valid_expenses
+                if start_text <= tx_date < end_text
+                and (includes_all or tx_category == category)
+            ]
+
+            spent = sum(matching, Decimal("0"))
+            difference = spent - current_limit
+            above_current_limit = difference > 0
+
+            if above_current_limit:
+                months_above += 1
+
+            month_results.append({
+                "period_start": start_text,
+                "period_last_day": (
+                    end - timedelta(days=1)
+                ).isoformat(),
+                "spent": float(spent),
+                "valid_entry_count": len(matching),
+                "has_recorded_expenses": bool(matching),
+                "above_current_limit": above_current_limit,
+                "difference_from_current_limit": float(difference)
+            })
+
+        review_recommended = months_above >= 2
+
+        reviews.append({
+            "budget_id": budget_id,
+            "name": name,
+            "category": category,
+            "current_limit": float(current_limit),
+            "months": month_results,
+            "months_above_current_limit": months_above,
+            "review_recommended": review_recommended,
+            "suggestion": (
+                "Consider reviewing the contributing expenses and whether "
+                "your spending plan and current limit remain appropriate. "
+                "A higher limit is not automatically affordable."
+                if review_recommended
+                else
+                "The repeated-above-limit review rule was not triggered. "
+                "This does not establish that the budget is affordable "
+                "or that the records are complete."
+            )
+        })
+
+    reviews.sort(
+        key=lambda item: (
+            -item["months_above_current_limit"],
+            item["name"].casefold(),
+            item["budget_id"]
+        )
+    )
+
+    return {
+        "as_of": reference_date.isoformat(),
+        "reviewed_period_start": periods[0][0].isoformat(),
+        "reviewed_period_last_day": (
+            current_month_start - timedelta(days=1)
+        ).isoformat(),
+        "monthly_budget_count": len(budgets),
+        "reviews": reviews,
+        "notices": notices,
+        "trigger_month_count": 2,
+        "limitation": (
+            "Past recorded expenses are compared with the current limit, "
+            "not the limits that applied historically. Missing entries, "
+            "category-name changes, and balance adjustments can affect "
+            "results. No recorded expenses does not prove zero actual "
+            "spending. Overlapping budgets are separate views of spending "
+            "and must not be added together."
+        )
+    }
+
 def get_budget_recommendations(user_id, reference_date=None):
     """
     Builds explainable recommendations for current calendar budgets.
