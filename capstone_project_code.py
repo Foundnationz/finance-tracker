@@ -465,6 +465,8 @@ def create_db():
                   (user_id, budget_id, effective_month)'''
         )
 
+        initialise_monthly_budget_history(conn)
+
         conn.commit()
 
 # ============================================================
@@ -2656,10 +2658,12 @@ def show_edit_budget(user_id, budget_id):
     tk.Label(
         note_frame,
         text=(
-            "Budgets use calendar periods: today, Monday–Sunday, "
-            "the current month, or the current year. "
-            "Changing the timeframe recalculates the current period; "
-            "it does not start a new rolling period today."
+            "Budgets use calendar periods. Monthly amount and category "
+            "changes apply to the entire CURRENT calendar month; "
+            "previous recorded months remain unchanged. Repeated saves "
+            "replace this month's settings, not create an edit-by-edit "
+            "audit log. Monthly budgets with history cannot be changed "
+            "to another timeframe."
         ),
         font=("Segoe UI", 9, "italic"),
         bg="#ebf8ff", fg="#2c5282",
@@ -2712,32 +2716,82 @@ def show_edit_budget(user_id, budget_id):
             msg_label.config(text=str(error), fg="red")
             return
 
-        # Save changes to database
-        with get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                '''UPDATE budgets
-                   SET budget_name = ?,
-                       timeframe   = ?,
-                       category    = ?,
-                       amount      = ?,
-                       start_date  = ?,
-                       end_date    = ?,
-                       notes       = ?
-                   WHERE id = ? AND user_id = ?''',
-                (
-                    new_name,
-                    new_timeframe,
-                    new_category,
-                    new_amount,
-                    start_date.strftime("%Y-%m-%d"),
-                    end_date.strftime("%Y-%m-%d"),
-                    new_notes,
-                    budget_id,
-                    user_id
+        # Save the budget and its current-month history together.
+        try:
+            with get_db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.cursor()
+
+                current = cursor.execute(
+                    '''SELECT timeframe
+                       FROM budgets
+                       WHERE id = ? AND user_id = ?''',
+                    (budget_id, user_id)
+                ).fetchone()
+
+                if current is None:
+                    raise ValueError("This budget no longer exists.")
+
+                current_timeframe = current[0]
+
+                history_exists = cursor.execute(
+                    '''SELECT 1
+                       FROM budget_monthly_history
+                       WHERE budget_id = ? AND user_id = ?
+                       LIMIT 1''',
+                    (budget_id, user_id)
+                ).fetchone() is not None
+
+                if (
+                    new_timeframe != "Monthly"
+                    and (
+                        current_timeframe == "Monthly"
+                        or history_exists
+                    )
+                ):
+                    raise ValueError(
+                        "A monthly budget with tracked history cannot "
+                        "be changed to another timeframe. Create a "
+                        "separate budget instead."
+                    )
+
+                cursor.execute(
+                    '''UPDATE budgets
+                       SET budget_name = ?,
+                           timeframe = ?,
+                           category = ?,
+                           amount = ?,
+                           start_date = ?,
+                           end_date = ?,
+                           notes = ?
+                       WHERE id = ? AND user_id = ?''',
+                    (
+                        new_name,
+                        new_timeframe,
+                        new_category,
+                        new_amount,
+                        start_date.isoformat(),
+                        end_date.isoformat(),
+                        new_notes,
+                        budget_id,
+                        user_id
+                    )
                 )
+
+                record_monthly_budget_settings(
+                    conn,
+                    user_id,
+                    budget_id
+                )
+
+                conn.commit()
+
+        except (sqlite3.Error, ValueError) as error:
+            msg_label.config(
+                text=f"Could not update the budget: {error}",
+                fg="red"
             )
-            conn.commit()
+            return
 
         msg_label.config(
             text="✅ Budget updated successfully!", fg="green")
@@ -3927,6 +3981,57 @@ def get_data_quality_report(user_id, reference_date=None):
         )
     }
 
+def initialise_monthly_budget_history(conn, reference_date=None):
+    """
+    Records a current-month baseline for monthly budgets that
+    have no history at all.
+
+    Does not create records for earlier months.
+    Does not create a new snapshot every time the app starts.
+    Uses the caller's transaction and does not commit.
+    """
+    import math
+
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    effective_month = reference_date.replace(day=1).isoformat()
+
+    budgets = conn.execute(
+        '''SELECT b.id, b.user_id, b.amount, b.category
+           FROM budgets b
+           WHERE b.timeframe = 'Monthly'
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM budget_monthly_history h
+                 WHERE h.budget_id = b.id
+             )'''
+    ).fetchall()
+
+    for budget_id, user_id, stored_amount, category in budgets:
+        try:
+            amount = float(stored_amount)
+            if not math.isfinite(amount) or amount <= 0:
+                continue
+        except (TypeError, ValueError, OverflowError):
+            continue
+
+        if user_id is None or not category or not category.strip():
+            continue
+
+        conn.execute(
+            '''INSERT INTO budget_monthly_history
+               (user_id, budget_id, effective_month, amount, category)
+               VALUES (?, ?, ?, ?, ?)''',
+            (
+                user_id,
+                budget_id,
+                effective_month,
+                amount,
+                category.strip()
+            )
+        )
+
 def record_monthly_budget_settings(
     conn,
     user_id,
@@ -5066,25 +5171,44 @@ def show_add_budget(user_id):
             msg_label.config(text=str(error), fg="red")
             return
 
-        with get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                '''INSERT INTO budgets
-                   (user_id, budget_name, timeframe, start_date,
-                    end_date, category, amount, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                (
-                    user_id,
-                    name,
-                    timeframe,
-                    start_date.strftime("%Y-%m-%d"),
-                    end_date.strftime("%Y-%m-%d"),
-                    category,
-                    amount,
-                    notes
+        try:
+            with get_db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.cursor()
+
+                cursor.execute(
+                    '''INSERT INTO budgets
+                       (user_id, budget_name, timeframe, start_date,
+                        end_date, category, amount, notes)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (
+                        user_id,
+                        name,
+                        timeframe,
+                        start_date.isoformat(),
+                        end_date.isoformat(),
+                        category,
+                        amount,
+                        notes
+                    )
                 )
+
+                new_budget_id = cursor.lastrowid
+
+                record_monthly_budget_settings(
+                    conn,
+                    user_id,
+                    new_budget_id
+                )
+
+                conn.commit()
+
+        except (sqlite3.Error, ValueError) as error:
+            msg_label.config(
+                text=f"Could not save the budget: {error}",
+                fg="red"
             )
-            conn.commit()
+            return
 
         check_and_award_badges(user_id)
         msg_label.config(text="✅ Budget added!", fg="green")
