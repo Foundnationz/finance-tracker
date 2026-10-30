@@ -468,8 +468,8 @@ of additional edge cases remain areas for improvement.
 - Budgets use calendar periods only; pay-cycle and custom-date periods
   are not implemented.
 - Currency selection changes display settings without exchange-rate conversion.
-- Wishlist funding is a virtual goal tracker and does not reserve or
-  transfer money from financial accounts.
+- Wishlist funding is a virtual goal tracker. It does not reserve money,
+  support target dates, or calculate suggested contribution plans.
 - Dashboard recommendations use explicit rules, not AI models or
   case-based reasoning. Their financial or behavioural effectiveness
   has not been established through a dedicated user study.
