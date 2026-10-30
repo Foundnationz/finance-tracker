@@ -4367,10 +4367,10 @@ def get_budget_month_expenses(user_id, budget_id, month_start_text):
 
 def get_historical_budget_review(user_id, reference_date=None):
     """
-    Reviews three completed months against current monthly budget limits.
+    Reviews three completed months using recorded monthly budget settings.
 
-    Does not reconstruct historical limits or infer affordability.
-    Reads data only.
+    Months without recorded settings are reported as unknown rather than
+    compared against current settings. Reads data only.
     """
     import math
     from decimal import Decimal
@@ -4380,9 +4380,7 @@ def get_historical_budget_review(user_id, reference_date=None):
 
     current_month_start = reference_date.replace(day=1)
 
-    # Oldest month first, ending immediately before the current month.
     periods = []
-
     for months_back in (3, 2, 1):
         start = current_month_start - relativedelta(months=months_back)
         end = start + relativedelta(months=1)
@@ -4390,13 +4388,15 @@ def get_historical_budget_review(user_id, reference_date=None):
 
     reviews = []
     notices = []
+    invalid_amount_count = 0
+    valid_expenses = []
 
     with get_db() as conn:
-        # All budget and transaction reads use one database snapshot.
+        # Budgets, history and transactions share one read snapshot.
         conn.execute("BEGIN")
 
         budgets = conn.execute(
-            '''SELECT id, budget_name, category, amount
+            '''SELECT id, budget_name
                FROM budgets
                WHERE user_id = ? AND timeframe = 'Monthly'
                ORDER BY budget_name COLLATE NOCASE, id''',
@@ -4417,115 +4417,145 @@ def get_historical_budget_review(user_id, reference_date=None):
             )
         ).fetchall()
 
-    valid_expenses = []
-    invalid_amount_count = 0
+        for category, amount, tx_date in rows:
+            try:
+                numeric_amount = float(amount)
 
-    for category, amount, tx_date in rows:
-        try:
-            numeric_amount = float(amount)
+                if (
+                    not math.isfinite(numeric_amount)
+                    or numeric_amount < 0
+                ):
+                    raise ValueError
 
-            if (
-                not math.isfinite(numeric_amount)
-                or numeric_amount < 0
-            ):
-                raise ValueError
+                valid_expenses.append(
+                    (category, Decimal(str(amount)), tx_date)
+                )
 
-            valid_expenses.append(
-                (category, Decimal(str(amount)), tx_date)
-            )
+            except (TypeError, ValueError, OverflowError):
+                invalid_amount_count += 1
 
-        except (TypeError, ValueError, OverflowError):
-            invalid_amount_count += 1
-
-    if invalid_amount_count:
-        notices.append(
-            f"{invalid_amount_count} expense record(s) with invalid "
-            "amounts were excluded from the reviewed date range."
-        )
-
-    for budget_id, name, category, stored_limit in budgets:
-        try:
-            numeric_limit = float(stored_limit)
-
-            if (
-                not math.isfinite(numeric_limit)
-                or numeric_limit <= 0
-            ):
-                raise ValueError
-
-            current_limit = Decimal(str(stored_limit))
-
-        except (TypeError, ValueError, OverflowError):
+        if invalid_amount_count:
             notices.append(
-                f"Budget '{name}' was excluded because its current "
-                "limit is not a finite positive amount."
+                f"{invalid_amount_count} expense record(s) with invalid "
+                "amounts were excluded from the reviewed date range."
             )
-            continue
 
-        category_key = (category or "").strip().casefold()
-        includes_all = category_key in (
-            "general",
-            ALL_EXPENSE_CATEGORIES.casefold()
-        )
+        for budget_id, name in budgets:
+            month_results = []
+            months_known = 0
+            months_above = 0
 
-        month_results = []
-        months_above = 0
+            for start, end in periods:
+                start_text = start.isoformat()
+                end_text = end.isoformat()
 
-        for start, end in periods:
-            start_text = start.isoformat()
-            end_text = end.isoformat()
+                try:
+                    settings = get_applicable_monthly_budget_settings(
+                        conn,
+                        user_id,
+                        budget_id,
+                        start_text
+                    )
+                except ValueError as error:
+                    settings = None
 
-            matching = [
-                amount
-                for tx_category, amount, tx_date in valid_expenses
-                if start_text <= tx_date < end_text
-                and (includes_all or tx_category == category)
-            ]
+                    notices.append(
+                        f"Budget '{name}' could not be compared for "
+                        f"{start_text}: {error}"
+                    )
 
-            spent = sum(matching, Decimal("0"))
-            difference = spent - current_limit
-            above_current_limit = difference > 0
+                if settings is None:
+                    month_results.append({
+                        "period_start": start_text,
+                        "period_last_day": (
+                            end - timedelta(days=1)
+                        ).isoformat(),
+                        "settings_known": False,
+                        "category": None,
+                        "applicable_limit": None,
+                        "settings_effective_month": None,
+                        "settings_carried_forward": False,
+                        "spent": None,
+                        "valid_entry_count": 0,
+                        "has_recorded_expenses": False,
+                        "above_limit": False,
+                        "difference_from_limit": None
+                    })
+                    continue
 
-            if above_current_limit:
-                months_above += 1
+                months_known += 1
 
-            month_results.append({
-                "period_start": start_text,
-                "period_last_day": (
-                    end - timedelta(days=1)
-                ).isoformat(),
-                "spent": float(spent),
-                "valid_entry_count": len(matching),
-                "has_recorded_expenses": bool(matching),
-                "above_current_limit": above_current_limit,
-                "difference_from_current_limit": float(difference)
+                includes_all = settings["includes_all_categories"]
+                category = settings["category"]
+
+                matching = [
+                    amount
+                    for tx_category, amount, tx_date in valid_expenses
+                    if start_text <= tx_date < end_text
+                    and (includes_all or tx_category == category)
+                ]
+
+                spent = sum(matching, Decimal("0"))
+                limit = Decimal(str(settings["amount"]))
+                difference = spent - limit
+                above_limit = difference > 0
+
+                if above_limit:
+                    months_above += 1
+
+                month_results.append({
+                    "period_start": start_text,
+                    "period_last_day": (
+                        end - timedelta(days=1)
+                    ).isoformat(),
+                    "settings_known": True,
+                    "category": category,
+                    "applicable_limit": float(limit),
+                    "settings_effective_month": settings["effective_month"],
+                    "settings_carried_forward": settings["carried_forward"],
+                    "spent": float(spent),
+                    "valid_entry_count": len(matching),
+                    "has_recorded_expenses": bool(matching),
+                    "above_limit": above_limit,
+                    "difference_from_limit": float(difference)
+                })
+
+            review_recommended = months_above >= 2
+
+            if months_known == 0:
+                suggestion = (
+                    "No recorded monthly settings are available for these "
+                    "months, so no limit comparison was performed."
+                )
+            elif review_recommended:
+                suggestion = (
+                    "Consider reviewing the contributing expenses and "
+                    "whether your spending plan and current limit remain "
+                    "appropriate. A higher limit is not automatically "
+                    "affordable."
+                )
+            else:
+                suggestion = (
+                    "The repeated-above-limit review rule was not "
+                    "triggered for the months with known settings. "
+                    "This does not establish that the budget is "
+                    "affordable or that the records are complete."
+                )
+
+            reviews.append({
+                "budget_id": budget_id,
+                "name": name,
+                "months": month_results,
+                "months_with_known_settings": months_known,
+                "months_above_limit": months_above,
+                "review_recommended": review_recommended,
+                "suggestion": suggestion
             })
-
-        review_recommended = months_above >= 2
-
-        reviews.append({
-            "budget_id": budget_id,
-            "name": name,
-            "category": category,
-            "current_limit": float(current_limit),
-            "months": month_results,
-            "months_above_current_limit": months_above,
-            "review_recommended": review_recommended,
-            "suggestion": (
-                "Consider reviewing the contributing expenses and whether "
-                "your spending plan and current limit remain appropriate. "
-                "A higher limit is not automatically affordable."
-                if review_recommended
-                else
-                "The repeated-above-limit review rule was not triggered. "
-                "This does not establish that the budget is affordable "
-                "or that the records are complete."
-            )
-        })
 
     reviews.sort(
         key=lambda item: (
-            -item["months_above_current_limit"],
+            -item["months_above_limit"],
+            -item["months_with_known_settings"],
             item["name"].casefold(),
             item["budget_id"]
         )
@@ -4538,16 +4568,19 @@ def get_historical_budget_review(user_id, reference_date=None):
             current_month_start - timedelta(days=1)
         ).isoformat(),
         "monthly_budget_count": len(budgets),
+        "reviewed_month_count": len(periods),
         "reviews": reviews,
         "notices": notices,
         "trigger_month_count": 2,
         "limitation": (
-            "Past recorded expenses are compared with the current limit, "
-            "not the limits that applied historically. Missing entries, "
-            "category-name changes, and balance adjustments can affect "
-            "results. No recorded expenses does not prove zero actual "
-            "spending. Overlapping budgets are separate views of spending "
-            "and must not be added together."
+            "Compares recorded expenses with the month-level limit and "
+            "category recorded for each month. Months without recorded "
+            "settings are excluded from comparison rather than assumed. "
+            "Settings history is month-level, not an edit-by-edit audit "
+            "log. Missing entries, category-name changes, and balance "
+            "adjustments can affect results. No recorded expenses does "
+            "not prove zero actual spending. Overlapping budgets are "
+            "separate views of spending and must not be added together."
         )
     }
 
@@ -13530,30 +13563,26 @@ def show_historical_budget_expenses(user_id, budget_id, month_start_text):
     popup.wait_visibility()
     popup.grab_set()
 
+
 def render_historical_budget_review(
     parent,
     user_id,
     reference_date=None
 ):
     """
-    Displays completed-month spending against current monthly limits.
+    Displays completed-month spending against recorded monthly settings.
 
-    Reads data only. Does not change budgets or transactions.
+    Reads data only.
     """
     if reference_date is None:
         reference_date = datetime.today().date()
 
-    section = tk.Frame(
-        parent,
-        bg="#f7fafc",
-        relief="solid",
-        bd=1
-    )
+    section = tk.Frame(parent, bg="#f7fafc", relief="solid", bd=1)
     section.pack(fill="x", pady=10)
 
     tk.Label(
         section,
-        text="Past Spending vs Current Monthly Limits",
+        text="Past Spending vs Recorded Monthly Limits",
         font=("Segoe UI", 12, "bold"),
         bg="#f7fafc",
         fg="#2c5282"
@@ -13578,6 +13607,7 @@ def render_historical_budget_review(
 
     sym = get_currency(user_id)
     trigger_count = report["trigger_month_count"]
+    month_count = report["reviewed_month_count"]
 
     tk.Label(
         section,
@@ -13598,11 +13628,12 @@ def render_historical_budget_review(
     tk.Label(
         section,
         text=(
-            "Past recorded spending is compared with each budget's "
-            "CURRENT limit, because historical limits are not stored. "
-            f"A review is suggested when at least {trigger_count} of the "
-            "three months were above that current limit. This is an "
-            "application rule, not a financial standard."
+            "Each month is compared with the limit and category recorded "
+            "for that month. Months without recorded settings are not "
+            "compared. A review is suggested when at least "
+            f"{trigger_count} month(s) with known settings were above "
+            "their applicable limits. This is an application rule, "
+            "not a financial standard."
         ),
         font=("Segoe UI", 8, "italic"),
         bg="#f7fafc",
@@ -13617,7 +13648,7 @@ def render_historical_budget_review(
 
         tk.Label(
             notice_frame,
-            text="Excluded records and budgets",
+            text="Excluded records and comparison notices",
             font=("Segoe UI", 9, "bold"),
             bg="#fffbeb",
             fg="#975a16"
@@ -13638,9 +13669,8 @@ def render_historical_budget_review(
         tk.Label(
             section,
             text=(
-                "No monthly budgets with a valid current limit were "
-                "available to review. Weekly, daily, and yearly budgets "
-                "are not included in this review."
+                "No monthly budgets were available to review. "
+                "Weekly, daily, and yearly budgets are not included."
             ),
             font=("Segoe UI", 10),
             bg="#f7fafc",
@@ -13673,11 +13703,10 @@ def render_historical_budget_review(
         tk.Label(
             card,
             text=(
-                f"Category: {review['category']}\n"
-                f"Current monthly limit: "
-                f"{sym}{review['current_limit']:,.2f}\n"
-                f"Months above the current limit: "
-                f"{review['months_above_current_limit']} of 3"
+                f"Months with recorded settings: "
+                f"{review['months_with_known_settings']} of {month_count}\n"
+                f"Months above their applicable limits: "
+                f"{review['months_above_limit']}"
             ),
             font=("Segoe UI", 10),
             bg="white",
@@ -13687,40 +13716,65 @@ def render_historical_budget_review(
         ).pack(anchor="w", padx=10, pady=(0, 6))
 
         for month in review["months"]:
+            period_text = (
+                f"{month['period_start']} → {month['period_last_day']}"
+            )
+
+            if not month["settings_known"]:
+                tk.Label(
+                    card,
+                    text=(
+                        f"{period_text}\n"
+                        "Historical budget settings unavailable.\n"
+                        "This month is excluded from the limit comparison."
+                    ),
+                    font=("Segoe UI", 9),
+                    bg="white",
+                    fg="#718096",
+                    wraplength=570,
+                    justify="left"
+                ).pack(anchor="w", padx=10, pady=(0, 10))
+                continue
+
+            difference = month["difference_from_limit"]
+
             if not month["has_recorded_expenses"]:
-                month_text = (
-                    f"{month['period_start']} → "
-                    f"{month['period_last_day']}\n"
-                    "No recorded expenses matched this budget. "
-                    "This does not prove no spending occurred."
+                comparison = (
+                    "No recorded expenses matched this month's category "
+                    "scope. This does not prove no spending occurred."
                 )
                 month_color = "#718096"
 
+            elif month["above_limit"]:
+                comparison = (
+                    f"{sym}{difference:,.2f} above the applicable limit"
+                )
+                month_color = "#c05621"
+
+            elif difference == 0:
+                comparison = "Exactly at the applicable limit"
+                month_color = "#975a16"
+
             else:
-                difference = month["difference_from_current_limit"]
+                comparison = (
+                    f"{sym}{abs(difference):,.2f} below the applicable limit"
+                )
+                month_color = "#276749"
 
-                if month["above_current_limit"]:
-                    comparison = (
-                        f"{sym}{difference:,.2f} above the current limit"
-                    )
-                    month_color = "#c05621"
+            month_text = (
+                f"{period_text}\n"
+                f"Recorded category scope: {month['category']}\n"
+                f"Applicable limit: "
+                f"{sym}{month['applicable_limit']:,.2f}\n"
+                f"Recorded spending: {sym}{month['spent']:,.2f} "
+                f"({month['valid_entry_count']} entries)\n"
+                f"{comparison}"
+            )
 
-                elif difference == 0:
-                    comparison = "Exactly at the current limit"
-                    month_color = "#975a16"
-
-                else:
-                    comparison = (
-                        f"{sym}{abs(difference):,.2f} below the current limit"
-                    )
-                    month_color = "#276749"
-
-                month_text = (
-                    f"{month['period_start']} → "
-                    f"{month['period_last_day']}\n"
-                    f"Recorded spending: {sym}{month['spent']:,.2f} "
-                    f"({month['valid_entry_count']} entries)\n"
-                    f"{comparison}"
+            if month["settings_carried_forward"]:
+                month_text += (
+                    "\nSettings carried forward from "
+                    f"{month['settings_effective_month']}."
                 )
 
             tk.Label(
