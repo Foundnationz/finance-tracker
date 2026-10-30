@@ -12425,6 +12425,156 @@ def render_repeated_spending_review(
         justify="left"
     ).pack(anchor="w", padx=12, pady=(4, 12))
 
+def render_data_quality_panel(parent, user_id, reference_date=None):
+    """
+    Displays current-data quality notices.
+
+    Reads data only. Does not modify or auto-correct records.
+    """
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    section = tk.Frame(
+        parent,
+        bg="#edf2f7",
+        relief="solid",
+        bd=1
+    )
+    section.pack(fill="x", pady=10)
+
+    tk.Label(
+        section,
+        text="Data Quality Review",
+        font=("Segoe UI", 12, "bold"),
+        bg="#edf2f7",
+        fg="#2d3748"
+    ).pack(anchor="w", padx=12, pady=(10, 4))
+
+    try:
+        report = get_data_quality_report(
+            user_id,
+            reference_date=reference_date
+        )
+    except (sqlite3.Error, ValueError, OverflowError) as error:
+        tk.Label(
+            section,
+            text=f"Data quality review is unavailable: {error}",
+            font=("Segoe UI", 9),
+            bg="#edf2f7",
+            fg="#c53030",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+        return
+
+    tk.Label(
+        section,
+        text=(
+            f"As of {report['as_of']}.\n"
+            "Checks are informational and apply to your financial data "
+            "inside the app."
+        ),
+        font=("Segoe UI", 9),
+        bg="#edf2f7",
+        fg="#4a5568",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    if not report["issues"]:
+        tk.Label(
+            section,
+            text=(
+                "No detectable data issues were found. "
+                "This does not establish that your records are complete, "
+                "because the app cannot detect transactions you did not record."
+            ),
+            font=("Segoe UI", 10),
+            bg="#edf2f7",
+            fg="#2d3748",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+        return
+
+    severity_colors = {
+        "info": "#2b6cb0",
+        "warning": "#c05621",
+        "error": "#c53030"
+    }
+
+    screen_actions = {
+        "unclassified_expenses": (
+            "Review Transactions",
+            lambda: show_add_transaction(user_id)
+        ),
+        "schedules_missing_account": (
+            "Review Schedules",
+            lambda: show_recurring_transactions(user_id)
+        ),
+        "unlinked_subscriptions": (
+            "Review Subscriptions",
+            lambda: show_subscription_list(user_id)
+        ),
+        "invalid_budget_limits": (
+            "Review Budgets",
+            lambda: show_budgets(user_id)
+        ),
+        "negative_account_balances": (
+            "Review Accounts",
+            lambda: show_account_balance(user_id)
+        )
+    }
+
+    for issue in report["issues"]:
+        card = tk.Frame(section, bg="white", relief="solid", bd=1)
+        card.pack(fill="x", padx=12, pady=5)
+
+        color = severity_colors.get(issue["severity"], "#2d3748")
+
+        tk.Label(
+            card,
+            text=issue["title"],
+            font=("Segoe UI", 11, "bold"),
+            bg="white",
+            fg=color,
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(10, 4))
+
+        tk.Label(
+            card,
+            text=issue["detail"],
+            font=("Segoe UI", 10),
+            bg="white",
+            fg="#4a5568",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(0, 8))
+
+        action = screen_actions.get(issue["key"])
+
+        if action is not None:
+            label, callback = action
+
+            make_button(
+                card,
+                label,
+                callback,
+                color="#4a5568",
+                width=22
+            ).pack(anchor="w", padx=10, pady=(0, 10))
+
+    tk.Label(
+        section,
+        text=report["limitation"],
+        font=("Segoe UI", 8, "italic"),
+        bg="#edf2f7",
+        fg="#718096",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(6, 12))
+
 # ============================================================
 # DASHBOARD SCREEN
 # ============================================================
@@ -12499,6 +12649,12 @@ def show_dashboard(user_id):
 
         # All current-guidance sections use the same reference date.
         today = datetime.today().date()
+
+        render_data_quality_panel(
+            insights_frame,
+            user_id,
+            reference_date=today
+        )
 
         render_budget_recommendations(
             insights_frame,
