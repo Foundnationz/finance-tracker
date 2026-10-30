@@ -3891,6 +3891,162 @@ def get_data_quality_report(user_id, reference_date=None):
         )
     }
 
+def get_budget_month_expenses(user_id, budget_id, month_start_text):
+    """
+    Returns the expenses used for one month of the historical review.
+
+    Applies the same rules as get_historical_budget_review():
+    - Expenses only
+    - Inclusive start date, exclusive end date
+    - Valid finite amounts of zero or more
+    - All-expense budgets include every category
+
+    Reads data only.
+    """
+    import math
+    from decimal import Decimal
+
+    try:
+        month_start = datetime.strptime(
+            month_start_text, "%Y-%m-%d"
+        ).date()
+    except (TypeError, ValueError):
+        raise ValueError(
+            "Month start must be a valid YYYY-MM-DD date."
+        ) from None
+
+    if month_start.day != 1:
+        raise ValueError(
+            "Month start must be the first day of a month."
+        )
+
+    month_end = month_start + relativedelta(months=1)
+
+    with get_db() as conn:
+        # Read the budget and its transactions from one snapshot.
+        conn.execute("BEGIN")
+
+        budget = conn.execute(
+            '''SELECT budget_name, category, amount, timeframe
+               FROM budgets
+               WHERE id = ? AND user_id = ?''',
+            (budget_id, user_id)
+        ).fetchone()
+
+        if budget is None:
+            raise ValueError("The budget no longer exists.")
+
+        budget_name, category, stored_limit, timeframe = budget
+
+        category_key = (category or "").strip().casefold()
+        includes_all = category_key in (
+            "general",
+            ALL_EXPENSE_CATEGORIES.casefold()
+        )
+
+        query = '''
+            SELECT t.date, t.time, t.category, t.amount,
+                   t.notes, t.reference, t.necessity,
+                   COALESCE(a.account_name, 'Missing account')
+            FROM transactions t
+            LEFT JOIN accounts a
+              ON a.id = t.account_id AND a.user_id = t.user_id
+            WHERE t.user_id = ?
+              AND t.type = 'expense'
+              AND t.date >= ?
+              AND t.date < ?
+        '''
+
+        params = [
+            user_id,
+            month_start.isoformat(),
+            month_end.isoformat()
+        ]
+
+        if not includes_all:
+            query += " AND t.category = ?"
+            params.append(category)
+
+        query += " ORDER BY t.date ASC, t.time ASC, t.id ASC"
+
+        rows = conn.execute(query, params).fetchall()
+
+    transactions = []
+    total = Decimal("0")
+    invalid_amount_count = 0
+
+    for row in rows:
+        (
+            tx_date, tx_time, tx_category, amount,
+            notes, reference, necessity, account_name
+        ) = row
+
+        try:
+            numeric_amount = float(amount)
+
+            if (
+                not math.isfinite(numeric_amount)
+                or numeric_amount < 0
+            ):
+                raise ValueError
+
+            value = Decimal(str(amount))
+
+        except (TypeError, ValueError, OverflowError):
+            invalid_amount_count += 1
+            continue
+
+        total += value
+
+        transactions.append({
+            "date": tx_date,
+            "time": tx_time,
+            "category": tx_category,
+            "amount": float(value),
+            "notes": notes or "",
+            "reference": reference or "",
+            "necessity": (
+                necessity
+                if necessity in ("need", "want")
+                else "unclassified"
+            ),
+            "account_name": account_name
+        })
+
+    try:
+        limit_value = float(stored_limit)
+        current_limit = (
+            limit_value
+            if math.isfinite(limit_value) and limit_value > 0
+            else None
+        )
+    except (TypeError, ValueError, OverflowError):
+        current_limit = None
+
+    return {
+        "budget_id": budget_id,
+        "budget_name": budget_name,
+        "category": category,
+        "timeframe": timeframe,
+        "includes_all_categories": includes_all,
+        "current_limit": current_limit,
+        "month_start": month_start.isoformat(),
+        "month_last_day": (
+            month_end - timedelta(days=1)
+        ).isoformat(),
+        "transactions": transactions,
+        "entry_count": len(transactions),
+        "total": float(total),
+        "invalid_amount_count": invalid_amount_count,
+        "limitation": (
+            "Shows valid recorded expenses matching this budget's current "
+            "category scope. Invalid amounts are excluded. Changing a "
+            "budget's category changes which past expenses are matched, "
+            "so this is not a historical record of the scope that applied "
+            "at the time."
+        )
+    }
+
 def get_historical_budget_review(user_id, reference_date=None):
     """
     Reviews three completed months against current monthly budget limits.
