@@ -447,17 +447,25 @@ of additional edge cases remain areas for improvement.
 
 ---
 
-## 📄 Project Report
+## 📄 Project Report and Development Update
 
-The academic project report is available in the [`docs/`](docs/) folder.
+The submitted academic project report is available in the
+[`docs/`](docs/) folder and is retained unchanged as a historical record.
 
-The report primarily documents the original Google Colab prototype.
-The current desktop implementation includes subsequent changes described
-in this README.
+It primarily documents the original Google Colab prototype and includes
+proposed capabilities that were not all implemented.
 
-Some original proposals and research ambitions—such as banking integration,
-AI coaching, and case-based recommendation reasoning—are not implemented
-in the current desktop application.
+Later desktop changes are documented separately in the
+[Post-Submission Desktop Implementation Update](docs/desktop-implementation-update.md).
+
+The desktop recommendation module was added after the original prototype.
+It was not part of the original prototype's reported user acceptance testing.
+
+The update document is a development record, not an official amendment
+to the submitted academic report.
+
+---
+
 
 ---
 
