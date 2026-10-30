@@ -12917,6 +12917,277 @@ def render_data_quality_panel(parent, user_id, reference_date=None):
         justify="left"
     ).pack(anchor="w", padx=12, pady=(6, 12))
 
+def show_historical_budget_expenses(user_id, budget_id, month_start_text):
+    """
+    Displays matching recorded expenses for one historical month.
+
+    Reads data only. Does not edit transactions or balances.
+    """
+    try:
+        detail = get_budget_month_expenses(
+            user_id,
+            budget_id,
+            month_start_text
+        )
+    except (sqlite3.Error, ValueError, OverflowError) as error:
+        messagebox.showerror(
+            "Historical Expenses Unavailable",
+            str(error),
+            parent=root
+        )
+        return
+
+    sym = get_currency(user_id)
+
+    popup = tk.Toplevel(root)
+    popup.title("Historical Budget Expenses")
+    popup.geometry("700x600")
+    popup.minsize(520, 420)
+    popup.configure(bg="#f0f4f8")
+    popup.transient(root)
+
+    def close_popup():
+        popup.destroy()
+
+    popup.protocol("WM_DELETE_WINDOW", close_popup)
+    popup.bind("<Escape>", lambda event: close_popup())
+
+    # Reserve footer space before adding the expanding table.
+    footer = tk.Frame(popup, bg="#f0f4f8", pady=8)
+    footer.pack(side="bottom", fill="x", padx=15)
+
+    tk.Label(
+        footer,
+        text=(
+            "Read-only view. Select a row to see its notes and reference. "
+            "Data is read when this window opens; refresh the Dashboard "
+            "after changing financial records."
+        ),
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8",
+        fg="#718096",
+        wraplength=650,
+        justify="left"
+    ).pack(anchor="w", pady=(0, 6))
+
+    make_button(
+        footer,
+        "Close",
+        close_popup,
+        color="#718096",
+        width=12
+    ).pack()
+
+    header = tk.Frame(popup, bg="#2b6cb0", pady=10)
+    header.pack(fill="x")
+
+    tk.Label(
+        header,
+        text=detail["budget_name"],
+        font=("Segoe UI", 14, "bold"),
+        bg="#2b6cb0",
+        fg="white",
+        wraplength=650
+    ).pack(padx=10)
+
+    tk.Label(
+        header,
+        text=(
+            f"{detail['month_start']} → {detail['month_last_day']}\n"
+            f"Current category scope: {detail['category']}"
+        ),
+        font=("Segoe UI", 9),
+        bg="#2b6cb0",
+        fg="white",
+        wraplength=650
+    ).pack(padx=10)
+
+    summary = tk.Frame(popup, bg="white", relief="solid", bd=1)
+    summary.pack(fill="x", padx=15, pady=8)
+
+    summary_text = (
+        f"Valid recorded expenses: {detail['entry_count']}\n"
+        f"Recorded total: {sym}{detail['total']:,.2f}"
+    )
+
+    if detail["current_limit"] is not None:
+        summary_text += (
+            f"\nCurrent budget limit: "
+            f"{sym}{detail['current_limit']:,.2f}"
+            "\nThis is not a stored historical limit."
+        )
+
+    tk.Label(
+        summary,
+        text=summary_text,
+        font=("Segoe UI", 10, "bold"),
+        bg="white",
+        fg="#2d3748",
+        justify="left"
+    ).pack(anchor="w", padx=10, pady=8)
+
+    tk.Label(
+        popup,
+        text=detail["limitation"],
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8",
+        fg="#718096",
+        wraplength=650,
+        justify="left"
+    ).pack(anchor="w", padx=15, pady=(0, 6))
+
+    if detail["invalid_amount_count"]:
+        tk.Label(
+            popup,
+            text=(
+                f"{detail['invalid_amount_count']} matching expense "
+                "record(s) with invalid amounts were excluded."
+            ),
+            font=("Segoe UI", 9),
+            bg="#f0f4f8",
+            fg="#975a16",
+            wraplength=650,
+            justify="left"
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+
+    # Reserve space for selected-row details above the footer.
+    selected_detail = tk.Label(
+        popup,
+        text="Select an expense to inspect its notes and reference.",
+        font=("Segoe UI", 9),
+        bg="#f0f4f8",
+        fg="#4a5568",
+        wraplength=650,
+        justify="left",
+        anchor="w"
+    )
+    selected_detail.pack(
+        side="bottom",
+        fill="x",
+        padx=15,
+        pady=6
+    )
+
+    table_frame = tk.Frame(popup, bg="#f0f4f8")
+    table_frame.pack(
+        fill="both",
+        expand=True,
+        padx=15,
+        pady=(0, 6)
+    )
+    table_frame.rowconfigure(0, weight=1)
+    table_frame.columnconfigure(0, weight=1)
+
+    columns = (
+        "date", "time", "category", "amount", "account", "necessity"
+    )
+
+    table = ttk.Treeview(
+        table_frame,
+        columns=columns,
+        show="headings",
+        selectmode="browse",
+        height=8
+    )
+
+    headings = {
+        "date": "Date",
+        "time": "Time",
+        "category": "Category",
+        "amount": "Expense",
+        "account": "Account",
+        "necessity": "Classification"
+    }
+
+    widths = {
+        "date": 100,
+        "time": 65,
+        "category": 140,
+        "amount": 110,
+        "account": 150,
+        "necessity": 110
+    }
+
+    for column in columns:
+        table.heading(column, text=headings[column])
+        table.column(
+            column,
+            width=widths[column],
+            minwidth=60,
+            anchor="e" if column == "amount" else "w"
+        )
+
+    vertical = ttk.Scrollbar(
+        table_frame,
+        orient="vertical",
+        command=table.yview
+    )
+    horizontal = ttk.Scrollbar(
+        table_frame,
+        orient="horizontal",
+        command=table.xview
+    )
+
+    table.configure(
+        yscrollcommand=vertical.set,
+        xscrollcommand=horizontal.set
+    )
+
+    table.grid(row=0, column=0, sticky="nsew")
+    vertical.grid(row=0, column=1, sticky="ns")
+    horizontal.grid(row=1, column=0, sticky="ew")
+
+    records_by_row = {}
+
+    for index, transaction in enumerate(detail["transactions"]):
+        row_id = str(index)
+        records_by_row[row_id] = transaction
+
+        table.insert(
+            "",
+            "end",
+            iid=row_id,
+            values=(
+                transaction["date"],
+                transaction["time"],
+                transaction["category"],
+                f"{sym}{transaction['amount']:,.2f}",
+                transaction["account_name"],
+                transaction["necessity"].capitalize()
+            )
+        )
+
+    def show_selected_details(event=None):
+        selection = table.selection()
+
+        if not selection:
+            return
+
+        transaction = records_by_row[selection[0]]
+
+        selected_detail.config(
+            text=(
+                f"Notes: {transaction['notes'] or 'None'}\n"
+                f"Reference: {transaction['reference'] or 'None'}"
+            )
+        )
+
+    table.bind("<<TreeviewSelect>>", show_selected_details)
+
+    if not detail["transactions"]:
+        selected_detail.config(
+            text=(
+                "No valid recorded expenses matched this budget "
+                "for the selected month. This does not prove "
+                "no real spending occurred."
+            )
+        )
+
+    # No global mouse-wheel binding is installed by this popup.
+    # The table has its own scrollbars and native widget scrolling.
+    popup.wait_visibility()
+    popup.grab_set()
+
 def render_historical_budget_review(
     parent,
     user_id,
@@ -13119,6 +13390,20 @@ def render_historical_budget_review(
                 wraplength=570,
                 justify="left"
             ).pack(anchor="w", padx=10, pady=(0, 5))
+
+            make_button(
+                card,
+                "View Expenses",
+                lambda bid=review["budget_id"],
+                       month_start=month["period_start"]:
+                    show_historical_budget_expenses(
+                        user_id,
+                        bid,
+                        month_start
+                    ),
+                color="#805ad5",
+                width=16
+            ).pack(anchor="w", padx=10, pady=(0, 10))
 
         tk.Label(
             card,
