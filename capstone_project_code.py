@@ -4226,41 +4226,36 @@ def get_applicable_monthly_budget_settings(
 
 def get_budget_month_expenses(user_id, budget_id, month_start_text):
     """
-    Returns the expenses used for one month of the historical review.
+    Returns one month's expenses using its applicable recorded
+    monthly budget settings.
 
-    Applies the same rules as get_historical_budget_review():
-    - Expenses only
-    - Inclusive start date, exclusive end date
-    - Valid finite amounts of zero or more
-    - All-expense budgets include every category
-
+    Raises ValueError when historical settings are unavailable.
     Reads data only.
     """
     import math
     from decimal import Decimal
 
-    try:
-        month_start = datetime.strptime(
-            month_start_text, "%Y-%m-%d"
-        ).date()
-    except (TypeError, ValueError):
-        raise ValueError(
-            "Month start must be a valid YYYY-MM-DD date."
-        ) from None
-
-    if month_start.day != 1:
-        raise ValueError(
-            "Month start must be the first day of a month."
-        )
-
-    month_end = month_start + relativedelta(months=1)
-
+    # The settings helper validates the month-start text.
     with get_db() as conn:
-        # Read the budget and its transactions from one snapshot.
         conn.execute("BEGIN")
 
+        settings = get_applicable_monthly_budget_settings(
+            conn,
+            user_id,
+            budget_id,
+            month_start_text
+        )
+
+        if settings is None:
+            raise ValueError(
+                "Historical budget settings are unavailable for this month. "
+                "The app will not guess which category or limit applied. "
+                "You can still review recorded transactions through "
+                "normal Transaction History."
+            )
+
         budget = conn.execute(
-            '''SELECT budget_name, category, amount, timeframe
+            '''SELECT budget_name
                FROM budgets
                WHERE id = ? AND user_id = ?''',
             (budget_id, user_id)
@@ -4269,13 +4264,10 @@ def get_budget_month_expenses(user_id, budget_id, month_start_text):
         if budget is None:
             raise ValueError("The budget no longer exists.")
 
-        budget_name, category, stored_limit, timeframe = budget
-
-        category_key = (category or "").strip().casefold()
-        includes_all = category_key in (
-            "general",
-            ALL_EXPENSE_CATEGORIES.casefold()
-        )
+        month_start = datetime.strptime(
+            settings["requested_month"], "%Y-%m-%d"
+        ).date()
+        month_end = month_start + relativedelta(months=1)
 
         query = '''
             SELECT t.date, t.time, t.category, t.amount,
@@ -4283,7 +4275,8 @@ def get_budget_month_expenses(user_id, budget_id, month_start_text):
                    COALESCE(a.account_name, 'Missing account')
             FROM transactions t
             LEFT JOIN accounts a
-              ON a.id = t.account_id AND a.user_id = t.user_id
+              ON a.id = t.account_id
+             AND a.user_id = t.user_id
             WHERE t.user_id = ?
               AND t.type = 'expense'
               AND t.date >= ?
@@ -4296,9 +4289,9 @@ def get_budget_month_expenses(user_id, budget_id, month_start_text):
             month_end.isoformat()
         ]
 
-        if not includes_all:
+        if not settings["includes_all_categories"]:
             query += " AND t.category = ?"
-            params.append(category)
+            params.append(settings["category"])
 
         query += " ORDER BY t.date ASC, t.time ASC, t.id ASC"
 
@@ -4346,23 +4339,15 @@ def get_budget_month_expenses(user_id, budget_id, month_start_text):
             "account_name": account_name
         })
 
-    try:
-        limit_value = float(stored_limit)
-        current_limit = (
-            limit_value
-            if math.isfinite(limit_value) and limit_value > 0
-            else None
-        )
-    except (TypeError, ValueError, OverflowError):
-        current_limit = None
-
     return {
         "budget_id": budget_id,
-        "budget_name": budget_name,
-        "category": category,
-        "timeframe": timeframe,
-        "includes_all_categories": includes_all,
-        "current_limit": current_limit,
+        "budget_name": budget[0],
+        "category": settings["category"],
+        "timeframe": "Monthly",
+        "includes_all_categories": settings["includes_all_categories"],
+        "applicable_limit": settings["amount"],
+        "settings_effective_month": settings["effective_month"],
+        "settings_carried_forward": settings["carried_forward"],
         "month_start": month_start.isoformat(),
         "month_last_day": (
             month_end - timedelta(days=1)
@@ -4372,11 +4357,11 @@ def get_budget_month_expenses(user_id, budget_id, month_start_text):
         "total": float(total),
         "invalid_amount_count": invalid_amount_count,
         "limitation": (
-            "Shows valid recorded expenses matching this budget's current "
-            "category scope. Invalid amounts are excluded. Changing a "
-            "budget's category changes which past expenses are matched, "
-            "so this is not a historical record of the scope that applied "
-            "at the time."
+            "Uses the recorded month-level category scope and limit "
+            "applicable to this month. These settings are not an "
+            "edit-by-edit audit log. Transactions are read as they "
+            "exist now; later transaction edits or deletions can "
+            "change historical spending totals."
         )
     }
 
@@ -13346,7 +13331,7 @@ def show_historical_budget_expenses(user_id, budget_id, month_start_text):
         header,
         text=(
             f"{detail['month_start']} → {detail['month_last_day']}\n"
-            f"Current category scope: {detail['category']}"
+            f"Recorded monthly category scope: {detail['category']}"
         ),
         font=("Segoe UI", 9),
         bg="#2b6cb0",
@@ -13362,11 +13347,16 @@ def show_historical_budget_expenses(user_id, budget_id, month_start_text):
         f"Recorded total: {sym}{detail['total']:,.2f}"
     )
 
-    if detail["current_limit"] is not None:
+    summary_text += (
+        f"\nApplicable recorded monthly limit: "
+        f"{sym}{detail['applicable_limit']:,.2f}"
+        f"\nSettings effective from: "
+        f"{detail['settings_effective_month']}"
+    )
+
+    if detail["settings_carried_forward"]:
         summary_text += (
-            f"\nCurrent budget limit: "
-            f"{sym}{detail['current_limit']:,.2f}"
-            "\nThis is not a stored historical limit."
+            "\nThese settings carry forward from an earlier month."
         )
 
     tk.Label(
