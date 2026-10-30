@@ -429,6 +429,42 @@ def create_db():
                      AND recurring_rule_id IS NOT NULL'''
             )
 
+        # Month-level settings history for monthly budgets.
+        # effective_month is an inclusive month boundary: YYYY-MM-01.
+        cursor.execute(
+            '''CREATE TABLE IF NOT EXISTS budget_monthly_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                budget_id INTEGER NOT NULL,
+                effective_month TEXT NOT NULL,
+                amount REAL NOT NULL CHECK (amount > 0),
+                category TEXT NOT NULL,
+
+                UNIQUE (budget_id, effective_month),
+
+                CHECK (
+                    length(effective_month) = 10
+                    AND effective_month GLOB
+                        '[0-9][0-9][0-9][0-9]-[0-9][0-9]-01'
+                    AND substr(effective_month, 6, 2)
+                        BETWEEN '01' AND '12'
+                ),
+
+                FOREIGN KEY(user_id)
+                    REFERENCES users(id),
+
+                FOREIGN KEY(budget_id)
+                    REFERENCES budgets(id)
+                    ON DELETE CASCADE
+            )'''
+        )
+
+        cursor.execute(
+            '''CREATE INDEX IF NOT EXISTS idx_budget_history_lookup
+               ON budget_monthly_history
+                  (user_id, budget_id, effective_month)'''
+        )
+
         conn.commit()
 
 # ============================================================
