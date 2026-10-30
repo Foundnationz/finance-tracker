@@ -13905,221 +13905,399 @@ def render_historical_budget_review(
 
 def show_dashboard(user_id):
     clear_window()
-
-    # Award dashboard badge first time user visits
     award_dashboard_access_badge(user_id)
 
+    background = "#f0f4f8"
+
+    # ── Fixed header ─────────────────────────────────────────
     header = tk.Frame(root, bg="#2b6cb0", pady=12)
     header.pack(fill="x")
-    tk.Label(header, text="📈 Dashboard", font=("Segoe UI", 16, "bold"),
-             fg="white", bg="#2b6cb0").pack()
 
-    # Wrap everything in scrollable frame
-    # so charts don't block the back button
-    scroll = make_scrollable_frame(root)
+    tk.Label(
+        header,
+        text="📈 Dashboard",
+        font=("Segoe UI", 16, "bold"),
+        fg="white",
+        bg="#2b6cb0"
+    ).pack()
 
-    body = tk.Frame(scroll, bg="#f0f4f8")
-    body.pack(fill="x", padx=50, pady=15)
+    # ── Fixed footer: reserve space before expanding content ─
+    footer = tk.Frame(root, bg=background, pady=8)
+    footer.pack(side="bottom", fill="x", padx=15)
 
-    # Month selector dropdown
-    tk.Label(body, text="Select Month:", font=("Segoe UI", 10, "bold"),
-             bg="#f0f4f8").pack(anchor="w")
+    make_button(
+        footer,
+        "← Back to Menu",
+        lambda: show_main_menu(current_user),
+        color="#718096",
+        width=18
+    ).pack(side="left")
+
+    # ── Report controls ──────────────────────────────────────
+    controls = tk.Frame(root, bg=background)
+    controls.pack(fill="x", padx=20, pady=10)
 
     months = [
         "January", "February", "March", "April",
         "May", "June", "July", "August",
         "September", "October", "November", "December"
     ]
-    month_var = tk.StringVar(value=datetime.today().strftime("%B"))
-    month_dd = ttk.Combobox(body, textvariable=month_var,
-                            values=months, state="readonly", width=20)
-    month_dd.pack(anchor="w", pady=(2, 10))
 
-    # Year selector — show current year and 2 previous years
-    current_year = datetime.today().year
-    years = [str(y) for y in range(current_year - 2, current_year + 1)]
-    tk.Label(body, text="Select Year:", font=("Segoe UI", 10, "bold"),
-             bg="#f0f4f8").pack(anchor="w")
-    year_var = tk.StringVar(value=str(current_year))
-    year_dd = ttk.Combobox(body, textvariable=year_var,
-                           values=years, state="readonly", width=10)
-    year_dd.pack(anchor="w", pady=(2, 10))
+    month_numbers = {
+        name: index
+        for index, name in enumerate(months, start=1)
+    }
 
-    msg_label = tk.Label(body, text="", font=("Segoe UI", 10),
-                         bg="#f0f4f8", fg="red")
-    msg_label.pack()
+    today = datetime.today().date()
+    month_var = tk.StringVar(value=months[today.month - 1])
+    year_var = tk.StringVar(value=str(today.year))
 
-    # Results area — charts and table go here
-    # Parent is scroll not root so it scrolls with everything else
-    results_frame = tk.Frame(scroll, bg="#f0f4f8")
-    results_frame.pack(fill="both", expand=True, padx=20, pady=5)
+    tk.Label(
+        controls,
+        text="Report month:",
+        font=("Segoe UI", 10, "bold"),
+        bg=background
+    ).grid(row=0, column=0, sticky="w", padx=(0, 8))
 
-    # Keep current guidance separate from the selected-month report.
-    insights_frame = tk.Frame(scroll, bg="#f0f4f8")
-    insights_frame.pack(fill="x", padx=20, pady=5)
+    month_dd = ttk.Combobox(
+        controls,
+        textvariable=month_var,
+        values=months,
+        state="readonly",
+        width=15
+    )
+    month_dd.grid(row=0, column=1, sticky="w", padx=(0, 12))
 
-    def refresh_current_insights():
-        for widget in insights_frame.winfo_children():
+    tk.Label(
+        controls,
+        text="Year:",
+        font=("Segoe UI", 10, "bold"),
+        bg=background
+    ).grid(row=0, column=2, sticky="w", padx=(0, 8))
+
+    year_dd = ttk.Combobox(
+        controls,
+        textvariable=year_var,
+        values=[
+            str(year)
+            for year in range(today.year - 2, today.year + 1)
+        ],
+        state="readonly",
+        width=8
+    )
+    year_dd.grid(row=0, column=3, sticky="w")
+
+    report_label = tk.Label(
+        controls,
+        text="",
+        font=("Segoe UI", 9),
+        bg=background,
+        fg="#4a5568",
+        justify="left",
+        wraplength=650
+    )
+    report_label.grid(
+        row=1,
+        column=0,
+        columnspan=4,
+        sticky="w",
+        pady=(8, 0)
+    )
+
+    # ── Tabs ─────────────────────────────────────────────────
+    notebook = ttk.Notebook(root)
+    notebook.pack(
+        fill="both",
+        expand=True,
+        padx=15,
+        pady=(0, 10)
+    )
+
+    overview_tab = tk.Frame(notebook, bg=background)
+    period_tab = tk.Frame(notebook, bg=background)
+    planning_tab = tk.Frame(notebook, bg=background)
+
+    notebook.add(overview_tab, text="Overview")
+    notebook.add(period_tab, text="Period Insights")
+    notebook.add(planning_tab, text="Current Planning")
+
+    # Each tab has its own scrollable content.
+    overview_body = make_scrollable_frame(overview_tab)
+    period_body = make_scrollable_frame(period_tab)
+    planning_body = make_scrollable_frame(planning_tab)
+
+    overview_results = tk.Frame(overview_body, bg=background)
+    overview_results.pack(fill="x", padx=15, pady=10)
+
+    period_results = tk.Frame(period_body, bg=background)
+    period_results.pack(fill="x", padx=15, pady=10)
+
+    planning_results = tk.Frame(planning_body, bg=background)
+    planning_results.pack(fill="x", padx=15, pady=10)
+
+    def clear_contents(frame):
+        for widget in frame.winfo_children():
             widget.destroy()
 
-        # All current-guidance sections share one reference date.
-        today = datetime.today().date()
-
-        render_data_quality_panel(
-            insights_frame,
-            user_id,
-            reference_date=today
+    def mark_selection_changed(event=None):
+        report_label.config(
+            text=(
+                "Report selection changed. Click Refresh Dashboard "
+                "to load the selected period. Current Planning uses "
+                "today's date, independently of this selection."
+            ),
+            fg="#975a16"
         )
 
-        render_budget_recommendations(
-            insights_frame,
-            user_id,
-            reference_date=today
-        )
+    month_dd.bind("<<ComboboxSelected>>", mark_selection_changed)
+    year_dd.bind("<<ComboboxSelected>>", mark_selection_changed)
 
-        render_upcoming_expense_recommendations(
-            insights_frame,
-            user_id,
-            reference_date=today
-        )
+    def refresh_dashboard():
+        selected_month = month_numbers[month_var.get()]
+        selected_year = int(year_var.get())
+        reference_date = datetime.today().date()
 
-        render_subscription_cost_review(
-            insights_frame,
-            user_id,
-            reference_date=today
-        )
+        # Read report data before clearing the current display.
+        try:
+            with get_db() as conn:
+                transactions = conn.execute(
+                    '''SELECT category, amount, type, date, time
+                       FROM transactions
+                       WHERE user_id = ?
+                         AND strftime('%m', date) = ?
+                         AND strftime('%Y', date) = ?
+                       ORDER BY date ASC, time ASC, id ASC''',
+                    (
+                        user_id,
+                        f"{selected_month:02d}",
+                        str(selected_year)
+                    )
+                ).fetchall()
 
-        render_historical_budget_review(
-            insights_frame,
-            user_id,
-            reference_date=today
-        )
-
-    # Show current guidance when the Dashboard first opens.
-    refresh_current_insights()
-
-    def on_show():
-        # Clear previous results
-        for widget in results_frame.winfo_children():
-            widget.destroy()
-
-        refresh_current_insights()
-
-        month_map = {
-            "January": "01", "February": "02", "March": "03",
-            "April": "04", "May": "05", "June": "06",
-            "July": "07", "August": "08", "September": "09",
-            "October": "10", "November": "11", "December": "12"
-        }
-        selected_month = month_map[month_var.get()]
-        selected_year  = year_var.get()
-
-        with get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                '''SELECT category, amount, type, date, time
-                   FROM transactions
-                   WHERE user_id = ?
-                   AND strftime('%m', date) = ?
-                   AND strftime('%Y', date) = ?
-                   ORDER BY date ASC''',
-                (user_id, selected_month, selected_year)
+        except sqlite3.Error as error:
+            messagebox.showerror(
+                "Dashboard Refresh Failed",
+                f"Could not load report transactions.\n\n{error}",
+                parent=root
             )
-            transactions = cursor.fetchall()
+            return
 
-        # Selected-period analysis is separate from today's budget guidance.
+        clear_contents(overview_results)
+        clear_contents(period_results)
+        clear_contents(planning_results)
+
+        selected_label = f"{month_var.get()} {selected_year}"
+
+        report_label.config(
+            text=(
+                f"Loaded report: {selected_label}. "
+                f"Current Planning refreshed as of "
+                f"{reference_date.isoformat()}."
+            ),
+            fg="#4a5568"
+        )
+
+        # ── Overview ─────────────────────────────────────────
+        tk.Label(
+            overview_results,
+            text=f"Recorded Overview — {selected_label}",
+            font=("Segoe UI", 13, "bold"),
+            bg=background,
+            fg="#2b6cb0"
+        ).pack(anchor="w", pady=(0, 6))
+
+        tk.Label(
+            overview_results,
+            text=(
+                "Shows records dated in the selected calendar month. "
+                "Future-dated records, if present, are included here; "
+                "current-period insight calculations exclude future dates."
+            ),
+            font=("Segoe UI", 9),
+            bg=background,
+            fg="#718096",
+            wraplength=650,
+            justify="left"
+        ).pack(anchor="w", pady=(0, 8))
+
+        sym = get_currency(user_id)
+
+        total_income = sum(
+            tx[1] for tx in transactions if tx[2] == "income"
+        )
+        total_expense = sum(
+            tx[1] for tx in transactions if tx[2] == "expense"
+        )
+        net = total_income - total_expense
+
+        summary = tk.Frame(
+            overview_results,
+            bg="white",
+            relief="solid",
+            bd=1
+        )
+        summary.pack(fill="x", pady=(0, 10))
+
+        summary_rows = [
+            ("Recorded income", total_income, "#276749"),
+            ("Recorded expenses", total_expense, "#9b2c2c")
+        ]
+
+        for label, value, color in summary_rows:
+            tk.Label(
+                summary,
+                text=f"{label}: {sym}{value:,.2f}",
+                font=("Segoe UI", 11, "bold"),
+                bg="white",
+                fg=color
+            ).pack(anchor="w", padx=12, pady=5)
+
+        net_label = (
+            "Recorded net surplus"
+            if net >= 0
+            else "Recorded net deficit"
+        )
+
+        tk.Label(
+            summary,
+            text=f"{net_label}: {sym}{abs(net):,.2f}",
+            font=("Segoe UI", 11, "bold"),
+            bg="white",
+            fg="#276749" if net >= 0 else "#9b2c2c"
+        ).pack(anchor="w", padx=12, pady=(5, 10))
+
+        if transactions:
+            # Charts now appear before the detailed table.
+            generate_charts(
+                transactions,
+                overview_results,
+                user_id
+            )
+
+            tk.Label(
+                overview_results,
+                text="Transaction Records",
+                font=("Segoe UI", 11, "bold"),
+                bg=background
+            ).pack(anchor="w", pady=(10, 4))
+
+            df = pd.DataFrame(
+                transactions,
+                columns=["Category", "Amount", "Type", "Date", "Time"]
+            )
+
+            table_text = scrolledtext.ScrolledText(
+                overview_results,
+                height=8,
+                width=80,
+                font=("Courier New", 9),
+                wrap="none"
+            )
+            table_text.pack(fill="x")
+            table_text.insert(tk.END, df.to_string(index=False))
+            table_text.config(state="disabled")
+
+        else:
+            tk.Label(
+                overview_results,
+                text=f"No transactions found for {selected_label}.",
+                font=("Segoe UI", 10),
+                bg=background,
+                fg="#718096"
+            ).pack(anchor="w", pady=10)
+
+        # ── Selected-period analysis ──────────────────────────
+        tk.Label(
+            period_results,
+            text=f"Period Insights — {selected_label}",
+            font=("Segoe UI", 13, "bold"),
+            bg=background,
+            fg="#2b6cb0"
+        ).pack(anchor="w", pady=(0, 6))
+
         render_category_spending_recommendations(
-            results_frame,
+            period_results,
             user_id,
-            selected_year=int(selected_year),
-            selected_month=int(selected_month),
-            reference_date=datetime.today().date()
+            selected_year=selected_year,
+            selected_month=selected_month,
+            reference_date=reference_date
         )
 
         render_needs_wants_reflection(
-            results_frame,
+            period_results,
             user_id,
-            selected_year=int(selected_year),
-            selected_month=int(selected_month),
-            reference_date=datetime.today().date()
+            selected_year=selected_year,
+            selected_month=selected_month,
+            reference_date=reference_date
         )
 
         render_repeated_spending_review(
-            results_frame,
+            period_results,
             user_id,
-            selected_year=int(selected_year),
-            selected_month=int(selected_month),
-            reference_date=datetime.today().date()
+            selected_year=selected_year,
+            selected_month=selected_month,
+            reference_date=reference_date
         )
 
-        if not transactions:
-            tk.Label(results_frame,
-                     text=f"No transactions found for {month_var.get()} {selected_year}.",
-                     font=("Segoe UI", 10), bg="#f0f4f8", fg="#718096").pack(pady=10)
-            return
+        # ── Current planning ─────────────────────────────────
+        tk.Label(
+            planning_results,
+            text=f"Current Planning — {reference_date.isoformat()}",
+            font=("Segoe UI", 13, "bold"),
+            bg=background,
+            fg="#2b6cb0"
+        ).pack(anchor="w", pady=(0, 4))
 
-        # --- Transaction Table using pandas ---
-        # pandas DataFrame formats data neatly into rows/columns
-        df = pd.DataFrame(
-            transactions,
-            columns=["Category", "Amount", "Type", "Date", "Time"]
+        tk.Label(
+            planning_results,
+            text=(
+                "Independent of the selected report month. "
+                "Each section states its own planning or review period."
+            ),
+            font=("Segoe UI", 9),
+            bg=background,
+            fg="#718096",
+            wraplength=650,
+            justify="left"
+        ).pack(anchor="w", pady=(0, 6))
+
+        render_data_quality_panel(
+            planning_results,
+            user_id,
+            reference_date=reference_date
+        )
+        render_budget_recommendations(
+            planning_results,
+            user_id,
+            reference_date=reference_date
+        )
+        render_upcoming_expense_recommendations(
+            planning_results,
+            user_id,
+            reference_date=reference_date
+        )
+        render_subscription_cost_review(
+            planning_results,
+            user_id,
+            reference_date=reference_date
+        )
+        render_historical_budget_review(
+            planning_results,
+            user_id,
+            reference_date=reference_date
         )
 
-        # Display table inside a scrollable text widget
-        table_frame = tk.Frame(results_frame, bg="#f0f4f8")
-        table_frame.pack(fill="x", pady=5)
+    make_button(
+        footer,
+        "Refresh Dashboard",
+        refresh_dashboard,
+        color="#3182ce",
+        width=20
+    ).pack(side="right")
 
-        tk.Label(table_frame, text="📋 Transaction Summary",
-                 font=("Segoe UI", 11, "bold"), bg="#f0f4f8").pack(anchor="w")
-
-        # scrolledtext shows the DataFrame as formatted text
-        table_text = scrolledtext.ScrolledText(
-            table_frame, height=8, width=80,
-            font=("Courier New", 9)
-        )
-        table_text.pack(fill="x")
-        table_text.insert(tk.END, df.to_string(index=False))
-        table_text.config(state="disabled")  # Read only
-
-        # --- Summary totals ---
-        total_income  = df[df["Type"] == "income"]["Amount"].sum()
-        total_expense = df[df["Type"] == "expense"]["Amount"].sum()
-        net           = total_income - total_expense
-
-        summary_frame = tk.Frame(results_frame, bg="white", relief="solid", bd=1)
-        summary_frame.pack(fill="x", padx=5, pady=8)
-
-        sym = get_currency(user_id)
-        tk.Label(summary_frame,
-                 text=f"  💚 Total Income:   {sym}{total_income:,.2f}",
-                 font=("Segoe UI", 10, "bold"), bg="white",
-                 fg="#276749").pack(anchor="w", padx=10, pady=(8, 2))
-        tk.Label(summary_frame,
-                 text=f"  🔴 Total Expenses: {sym}{total_expense:,.2f}",
-                 font=("Segoe UI", 10, "bold"), bg="white",
-                 fg="#9b2c2c").pack(anchor="w", padx=10, pady=2)
-
-        net_color = "#276749" if net >= 0 else "#9b2c2c"
-        net_label = (
-            "Recorded Net Surplus"
-            if net >= 0
-            else "Recorded Net Deficit"
-        )
-        tk.Label(summary_frame,
-                 text=f"  {'💰' if net >= 0 else '⚠️'} {net_label}:    {sym}{abs(net):,.2f}",
-                 font=("Segoe UI", 10, "bold"), bg="white",
-                 fg=net_color).pack(anchor="w", padx=10, pady=(2, 8))
-
-        # --- Generate Charts ---
-        generate_charts(transactions, results_frame, user_id)
-
-    make_button(body, "📊 Show Dashboard", on_show, color="#3182ce").pack(pady=8)
-
-    back_btn = tk.Frame(scroll, bg="#f0f4f8")
-    back_btn.pack(pady=15)
-    make_button(back_btn, "← Back to Menu",
-                lambda: show_main_menu(current_user),
-                color="#718096").pack()
+    # Open on Overview and load the initial report automatically.
+    notebook.select(overview_tab)
+    refresh_dashboard()
 
 
 def generate_charts(transactions, parent_frame, user_id):
