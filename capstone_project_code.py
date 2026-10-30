@@ -19,6 +19,7 @@ import sys
 import os
 import sqlite3
 import re
+import math
 import random
 import bcrypt
 import tkinter as tk
@@ -14353,98 +14354,147 @@ def show_dashboard(user_id):
 
 def generate_charts(transactions, parent_frame, user_id):
     """
-    Generates two charts embedded in the tkinter window:
-    1. Pie chart  — Income vs Expense split
-    2. Line chart — Income and Expense trend over selected month
+    Generates two embedded charts for the selected month:
 
-    FigureCanvasTkAgg embeds matplotlib figures directly
-    into a tkinter frame — no popup windows.
+    1. Pie chart  — income vs expense totals.
+    2. Line chart — daily income and expense totals.
+
+    Transactions are aggregated by day so multiple entries on the
+    same date do not plot as a vertical line.
+
+    Reads data only. Does not change any records.
     """
+    sym = get_currency(user_id)
 
-    # Separate income and expense data
-    income_amounts  = []
-    income_dates    = []
-    expense_amounts = []
-    expense_dates   = []
+    # Aggregate amounts by calendar day.
+    income_by_day = {}
+    expense_by_day = {}
+    skipped_invalid = 0
 
     for tx in transactions:
         category, amount, tx_type, date, time = tx
+
         try:
-            date_obj = datetime.strptime(date, "%Y-%m-%d")
-        except ValueError:
+            date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+            numeric_amount = float(amount)
+
+            if not math.isfinite(numeric_amount) or numeric_amount < 0:
+                raise ValueError
+
+        except (TypeError, ValueError):
+            skipped_invalid += 1
             continue
 
         if tx_type == "income":
-            income_amounts.append(amount)
-            income_dates.append(date_obj)
-        else:
-            expense_amounts.append(amount)
-            expense_dates.append(date_obj)
+            income_by_day[date_obj] = (
+                income_by_day.get(date_obj, 0.0) + numeric_amount
+            )
+        elif tx_type == "expense":
+            expense_by_day[date_obj] = (
+                expense_by_day.get(date_obj, 0.0) + numeric_amount
+            )
 
-    total_income  = sum(income_amounts)
-    total_expense = sum(expense_amounts)
+    total_income = sum(income_by_day.values())
+    total_expense = sum(expense_by_day.values())
 
-    # Nothing to chart if all zero
     if total_income == 0 and total_expense == 0:
-        tk.Label(parent_frame, text="No chart data available.",
-                 font=("Segoe UI", 10), bg="#f0f4f8").pack()
+        tk.Label(
+            parent_frame,
+            text="No chart data available for this month.",
+            font=("Segoe UI", 10),
+            bg="#f0f4f8"
+        ).pack(anchor="w", pady=6)
+
+        if skipped_invalid:
+            tk.Label(
+                parent_frame,
+                text=(
+                    f"{skipped_invalid} record(s) with invalid amounts "
+                    "were excluded from the charts."
+                ),
+                font=("Segoe UI", 8, "italic"),
+                bg="#f0f4f8",
+                fg="#975a16"
+            ).pack(anchor="w")
         return
 
-    # Create figure with 2 subplots side by side
-    # figsize = (width, height) in inches
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
     fig.patch.set_facecolor("#f0f4f8")
 
-    # --- Pie Chart (left) ---
-    # Shows proportion of income vs expense
-    sizes  = [total_income, total_expense]
-    # Get the user's chosen currency symbol
-    sym = get_currency(user_id)
-
+    # ── Pie chart ─────────────────────────────────────────────
+    sizes = [total_income, total_expense]
     labels = [
-        f"Income\n{sym}{total_income:,.2f}",     # ← Uses sym not $
-        f"Expense\n{sym}{total_expense:,.2f}"     # ← Uses sym not $
+        f"Income\n{sym}{total_income:,.2f}",
+        f"Expense\n{sym}{total_expense:,.2f}"
     ]
     colors = ["#48bb78", "#fc8181"]
 
-    # Filter out zero values so pie chart doesn't error
-    filtered = [(s, l, c) for s, l, c in zip(sizes, labels, colors) if s > 0]
+    filtered = [
+        (size, label, color)
+        for size, label, color in zip(sizes, labels, colors)
+        if size > 0
+    ]
+
     if filtered:
         f_sizes, f_labels, f_colors = zip(*filtered)
-        ax1.pie(f_sizes, labels=f_labels, colors=f_colors,
-                autopct="%1.1f%%", startangle=90)
+        ax1.pie(
+            f_sizes,
+            labels=f_labels,
+            colors=f_colors,
+            autopct="%1.1f%%",
+            startangle=90
+        )
+
     ax1.set_title("Income vs Expense", fontsize=11, fontweight="bold")
     ax1.axis("equal")
 
-    # --- Line Chart (right) ---
-    # Shows income and expense amounts plotted over dates
+    # ── Daily line chart ──────────────────────────────────────
     ax2.set_facecolor("#ffffff")
 
-    if income_dates and income_amounts:
-        ax2.plot(income_dates, income_amounts,
-                 label="Income", color="#48bb78",
-                 marker="o", linewidth=2)
+    if income_by_day:
+        income_days = sorted(income_by_day)
+        ax2.plot(
+            income_days,
+            [income_by_day[day] for day in income_days],
+            label="Income",
+            color="#48bb78",
+            marker="o",
+            linewidth=2
+        )
 
-    if expense_dates and expense_amounts:
-        ax2.plot(expense_dates, expense_amounts,
-                 label="Expense", color="#fc8181",
-                 marker="o", linewidth=2)
+    if expense_by_day:
+        expense_days = sorted(expense_by_day)
+        ax2.plot(
+            expense_days,
+            [expense_by_day[day] for day in expense_days],
+            label="Expense",
+            color="#fc8181",
+            marker="o",
+            linewidth=2
+        )
 
-    # Format x-axis dates
     ax2.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
-    ax2.xaxis.set_major_locator(mdates.DayLocator(interval=3))
-    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha="right")
+    ax2.xaxis.set_major_locator(
+        mdates.AutoDateLocator(minticks=3, maxticks=8)
+    )
+    plt.setp(
+        ax2.xaxis.get_majorticklabels(),
+        rotation=45,
+        ha="right"
+    )
 
     ax2.set_xlabel("Date", fontsize=9)
-    ax2.set_ylabel("Amount ($)", fontsize=9)
-    ax2.set_title("Income & Expense Trend", fontsize=11, fontweight="bold")
+    ax2.set_ylabel(f"Daily total ({sym})", fontsize=9)
+    ax2.set_title(
+        "Daily Income & Expense Totals",
+        fontsize=11,
+        fontweight="bold"
+    )
     ax2.legend()
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
 
-    # Embed chart into tkinter frame
-    # Without FigureCanvasTkAgg, matplotlib would open a separate popup window
     chart_frame = tk.Frame(parent_frame, bg="#f0f4f8")
     chart_frame.pack(fill="both", expand=True, pady=10)
 
@@ -14452,8 +14502,32 @@ def generate_charts(transactions, parent_frame, user_id):
     canvas.draw()
     canvas.get_tk_widget().pack(fill="both", expand=True)
 
-    # Close figure after embedding to free memory
     plt.close(fig)
+
+    tk.Label(
+        parent_frame,
+        text=(
+            "Line chart shows one income total and one expense total "
+            "per day. A single day with one entry appears as a single point."
+        ),
+        font=("Segoe UI", 8, "italic"),
+        bg="#f0f4f8",
+        fg="#718096",
+        wraplength=650,
+        justify="left"
+    ).pack(anchor="w", pady=(4, 0))
+
+    if skipped_invalid:
+        tk.Label(
+            parent_frame,
+            text=(
+                f"{skipped_invalid} record(s) with invalid amounts "
+                "were excluded from the charts."
+            ),
+            font=("Segoe UI", 8, "italic"),
+            bg="#f0f4f8",
+            fg="#975a16"
+        ).pack(anchor="w")
 
 
 # ============================================================
