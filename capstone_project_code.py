@@ -789,8 +789,23 @@ def make_scrollable_frame(parent):
         lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
     )
 
-    canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+    # Keep the canvas item ID so its width can be updated.
+    content_window = canvas.create_window(
+        (0, 0),
+        window=scroll_frame,
+        anchor="nw"
+    )
+
     canvas.configure(yscrollcommand=scrollbar.set)
+
+    def resize_scroll_content(event):
+        # Make the inner frame match the canvas's visible width.
+        canvas.itemconfigure(
+            content_window,
+            width=max(event.width, 1)
+        )
+
+    canvas.bind("<Configure>", resize_scroll_content)
 
     canvas.pack(side="left", fill="both", expand=True)
     scrollbar.pack(side="right", fill="y")
