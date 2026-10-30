@@ -27,12 +27,13 @@ service, or financial advisory platform.
 | Feature | Description |
 |---|---|
 | 💳 Account Management | Track up to five financial accounts, edit names and notes, and record balance adjustments with a reason |
-| 📊 Budget Tracking | Create category-based budgets with daily, weekly, monthly, or yearly timeframes, spending breakdowns, notes, and alerts |
+| 📊 Budget Tracking | Create category-based budgets with daily, weekly, monthly, or yearly calendar periods, spending breakdowns, notes, and alerts |
 | 💸 Transactions | Add, edit, delete, and search income and expenses using categories, tags, notes, references, and Need/Want classification |
 | 🔁 Recurring Transactions | Schedule income and expenses with login-based processing, missed-occurrence catch-up, history, and pause/resume controls |
 | 🔄 Subscriptions | Manage subscription expenses through the shared recurring engine, including multiple monthly billing days and linked payment history |
 | 🎯 Wishlist | Track virtual contributions toward purchase goals independently of account balances |
 | 📈 Dashboard | View monthly transaction summaries and income/expense charts |
+| 💡 Financial Insights | Explainable, rule-based suggestions covering budget allowances, spending changes, upcoming expenses, subscription commitments, and Needs/Wants reflection |
 | 🏅 Badges and Streaks | Recognise usage milestones and consecutive-day logins |
 | ⚙️ Currency Display | Select a display currency from 20 options, including USD, MYR, GBP, and EUR; amounts are not converted |
 | 📥 CSV Export | Export transaction records to a CSV file |
@@ -111,6 +112,101 @@ processing problem, because this could create duplicate records.
 
 ---
 
+## 📅 How Budget Periods Work
+
+Budgets use calendar periods:
+
+| Timeframe | Period |
+|---|---|
+| Daily | Today |
+| Weekly | Monday through Sunday |
+| Monthly | First through last day of the current month |
+| Yearly | 1 January through 31 December |
+
+- Spending is counted from the period start through today.
+- Future-dated transactions are excluded from current spending totals.
+- The limit applies to the whole calendar period, including expenses
+  recorded before the budget was created.
+- Limits are not automatically prorated for budgets created mid-period.
+- The Add Budget screen previews the current period before saving.
+- Pay-cycle and custom-date budget periods are not currently implemented.
+
+---
+
+## 💡 Financial Insights and Recommendations
+
+The Dashboard includes a knowledge-based recommendation module.
+It applies explicit rules to recorded financial information and explains
+the observations and calculations behind its suggestions.
+
+### Selected-Period Insights
+
+These follow the month and year selected in the Dashboard:
+
+- **Category spending comparison:** highlights up to three category
+  spending increases, ranked by monetary difference.
+- **Needs/Wants reflection:** shows Needs, Wants, and unclassified expense
+  totals. Percentages use classified expenses only—not income.
+
+For the current month, category comparisons use matched elapsed-day
+ranges against the previous month. If the previous month is shorter,
+the comparison cutoff is limited to keep the day counts equal.
+Completed months are compared as full calendar months, with their
+different lengths disclosed.
+
+### Current Guidance
+
+These use the current date, independently of the selected report month:
+
+- **Daily budget allowance:** divides the remaining calendar-period
+  budget by remaining days, including today. Reached or exceeded limits
+  produce spending-review guidance instead.
+- **Upcoming scheduled expenses:** groups unprocessed active expense
+  occurrences due over seven calendar days, including today, by account.
+  It compares them with current recorded account balances.
+- **Subscription cost review:** estimates unprocessed subscription
+  expenses scheduled for the next calendar month using current active
+  schedule settings and prices.
+
+### Important Interpretation
+
+- Recommendations do not generate transactions, change balances,
+  reserve funds, or automatically modify budgets.
+- Guidance refreshes when the Dashboard opens or Show Dashboard is clicked.
+- Missing records, user-supplied classifications, category-name changes,
+  and balance adjustments can affect results.
+- Invalid amounts and unevaluable schedules are excluded where detected,
+  with notices explaining the exclusions.
+- Unclassified expenses are not treated as Wants.
+- Needs/Wants percentages must not be compared directly with the
+  50/30/20 income-allocation guideline.
+- Scheduled-expense guidance is not a complete cash-flow forecast:
+  it does not include all future income, spending, or balance changes.
+- Budget allowances can overlap, and subscription commitments can appear
+  in more than one planning horizon. Do not add overlapping figures together.
+- Increased spending does not automatically indicate a problem, and the
+  app does not know whether a subscription is unused.
+
+### Approach and Evaluation
+
+This is an explainable, rule-based knowledge system—not machine learning,
+case-based reasoning, emotional analysis, or automatic impulse-purchase
+detection.
+
+Temporary-database calculation tests and combined Dashboard workflow
+checks have passed for the implemented scenarios, including a check
+that viewing insights leaves transaction counts and balances unchanged.
+
+These checks do not establish that the recommendations improve savings,
+financial literacy, or long-term financial behaviour. Those outcomes
+require separate user research.
+
+The recommendation module was added to the desktop implementation after
+the original Colab prototype. It was not part of the original prototype's
+reported user testing.
+
+---
+
 ## 🛠️ Built With
 
 | Tool | Purpose |
@@ -137,10 +233,19 @@ processing problem, because this could create duplicate records.
 - A Python installation with working tkinter support.
 - Third-party libraries listed in `requirements.txt`.
 
-**Dependency compatibility note:** installation from `requirements.txt`
-still needs verification in a clean Python 3.14 virtual environment.
-The application working in an existing development environment does not
-guarantee that every pinned dependency will install successfully on a new machine.
+### Installation Verification
+
+The dependencies in `requirements.txt` were successfully installed in a
+clean Python 3.14 virtual environment on Windows.
+
+Verification included:
+- `pip check` reporting no broken requirements.
+- Successful imports of the required libraries.
+- A temporary-database smoke test covering registration, login, account
+  creation, transaction entry, dashboard charts, and the subscription form.
+
+This verifies the tested Windows/Python environment. It does not establish
+compatibility with every operating system or Python version.
 
 ### 1. Clone the Repository
 
@@ -164,9 +269,6 @@ Use the virtual environment's Python directly; activation is not required:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-
-If installation fails, review the dependency compatibility note above.
-Do not assume the environment is ready after a failed installation.
 
 ### 4. Run the Application
 
@@ -298,13 +400,21 @@ GUI workflow checks covering:
 - Explicit setup of older, unlinked subscriptions.
 - User-data deletion in dependency order.
 - Login warnings when scheduled processing fails.
+- Calendar budget-period boundaries, including short months and leap years.
+- Unified budget spending totals across cards, alerts, and breakdowns.
+- Recommendation calculations for allowances, spending comparisons,
+  upcoming expenses, subscription costs, and Needs/Wants reflection.
+- Combined Dashboard refresh behavior and read-only operation.
+
+A clean-environment installation and application smoke test have passed
+on Windows using Python 3.14.
 
 These checks provide evidence for the tested scenarios.
 They do not establish that the application is free of bugs,
 production-ready, or suitable for regulated financial services.
 
-A complete automated test suite and clean-environment installation
-verification remain areas for improvement.
+A complete automated test suite, broader platform testing, and verification
+of additional edge cases remain areas for improvement.
 
 ---
 
@@ -316,15 +426,20 @@ verification remain areas for improvement.
   background payment service.
 - Subscription scheduling currently uses monthly billing-day patterns,
   not annual subscription plans.
+- Budgets use calendar periods only; pay-cycle and custom-date periods
+  are not implemented.
 - Currency selection changes display settings without exchange-rate conversion.
 - Wishlist funding is a virtual goal tracker and does not reserve or
   transfer money from financial accounts.
+- Dashboard recommendations use explicit rules, not AI models or
+  case-based reasoning. Their financial or behavioural effectiveness
+  has not been established through a dedicated user study.
+- Financial educational quotes are randomly selected rather than
+  personalised to the user's circumstances.
 - Password hashing protects passwords differently from database encryption;
   financial records are not encrypted by this mechanism.
 - Transactions are editable and deletable, so the application does not
   provide an immutable financial audit trail.
-- Rule-based scheduling, budget alerts, and random educational quotes
-  are not AI-powered financial coaching.
 - Compatibility, accessibility, large-data performance, and security
   require further evaluation.
 - The current codebase remains primarily a single application file.
@@ -341,8 +456,8 @@ The current desktop implementation includes subsequent changes described
 in this README.
 
 Some original proposals and research ambitions—such as banking integration,
-AI coaching, and advanced financial education—are not implemented in the
-current desktop application.
+AI coaching, and case-based recommendation reasoning—are not implemented
+in the current desktop application.
 
 ---
 
@@ -371,9 +486,15 @@ necessarily correspond to published GitHub releases.
 - Added clearer schedule-processing failure warnings.
 - Added selectable currency display without exchange-rate conversion.
 - Added CSV export.
+- Added consistent calendar budget periods across cards, alerts, and breakdowns.
 - Added budget spending breakdowns and clearer monetary alerts.
 - Added budget notes and shared category creation.
 - Added balance adjustments recorded as transactions with a reason.
+- Added explainable Dashboard budget-allowance recommendations.
+- Added selected-period category spending comparisons and Needs/Wants reflection.
+- Added upcoming scheduled-expense guidance grouped by account.
+- Added next-calendar-month subscription cost reviews.
+- Tested the combined insights display for refresh behavior and read-only operation.
 - Improved developer user-data cleanup.
 
 ---
