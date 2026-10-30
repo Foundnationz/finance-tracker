@@ -3572,6 +3572,150 @@ def get_needs_wants_reflection(
         )
     }
 
+def get_repeated_spending_review(
+    user_id,
+    selected_year,
+    selected_month,
+    reference_date=None
+):
+    """
+    Finds categories with at least five positive expense entries
+    in the selected period.
+
+    Returns up to three categories, ranked by recorded total.
+
+    Reads data only. Does not infer impulse buying or wastefulness.
+    """
+    import math
+    from datetime import date
+    from decimal import Decimal
+
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    period_start = date(selected_year, selected_month, 1)
+    current_month_start = reference_date.replace(day=1)
+
+    if period_start > current_month_start:
+        raise ValueError(
+            "Repeated spending review is unavailable for future months."
+        )
+
+    period_end = period_start + relativedelta(months=1)
+
+    if period_start == current_month_start:
+        counted_end = min(
+            period_end,
+            reference_date + timedelta(days=1)
+        )
+    else:
+        counted_end = period_end
+
+    minimum_entries = 5
+    invalid_amount_count = 0
+    grouped = {}
+
+    with get_db() as conn:
+        rows = conn.execute(
+            '''SELECT category, amount
+               FROM transactions
+               WHERE user_id = ?
+                 AND type = 'expense'
+                 AND date >= ?
+                 AND date < ?''',
+            (
+                user_id,
+                period_start.isoformat(),
+                counted_end.isoformat()
+            )
+        ).fetchall()
+
+    for category, amount in rows:
+        try:
+            numeric_amount = float(amount)
+
+            if (
+                not math.isfinite(numeric_amount)
+                or numeric_amount < 0
+            ):
+                raise ValueError
+
+            value = Decimal(str(amount))
+
+        except (TypeError, ValueError, OverflowError):
+            invalid_amount_count += 1
+            continue
+
+        # Zero-value entries do not represent a positive recorded cost.
+        if value == 0:
+            continue
+
+        if category not in grouped:
+            grouped[category] = {
+                "count": 0,
+                "total": Decimal("0")
+            }
+
+        grouped[category]["count"] += 1
+        grouped[category]["total"] += value
+
+    eligible = []
+
+    for category, values in grouped.items():
+        if values["count"] < minimum_entries:
+            continue
+
+        eligible.append({
+            "category": category,
+            "entry_count": values["count"],
+            "total": values["total"],
+            "average": values["total"] / Decimal(values["count"])
+        })
+
+    # Sort using Decimal totals before converting for display.
+    eligible.sort(
+        key=lambda item: (
+            -item["total"],
+            -item["entry_count"],
+            str(item["category"]).casefold()
+        )
+    )
+
+    reviews = [
+        {
+            "category": item["category"],
+            "entry_count": item["entry_count"],
+            "total": float(item["total"]),
+            "average": float(item["average"]),
+            "suggestion": (
+                "Consider reviewing these entries for opportunities "
+                "to reduce spending if that supports your priorities."
+            )
+        }
+        for item in eligible[:3]
+    ]
+
+    return {
+        "period_start": period_start.isoformat(),
+        "period_last_day": (
+            period_end - timedelta(days=1)
+        ).isoformat(),
+        "counted_through": (
+            counted_end - timedelta(days=1)
+        ).isoformat(),
+        "minimum_entries": minimum_entries,
+        "eligible_category_count": len(eligible),
+        "reviews": reviews,
+        "invalid_amount_count": invalid_amount_count,
+        "limitation": (
+            "Counts positive recorded expense entries, not verified "
+            "purchases or spending habits. Repetition does not establish "
+            "that expenses are unnecessary or impulsive. Split entries, "
+            "scheduled payments, balance adjustments, missing records, "
+            "and category naming can affect the result."
+        )
+    }
+
 def get_budget_recommendations(user_id, reference_date=None):
     """
     Builds explainable recommendations for current calendar budgets.
