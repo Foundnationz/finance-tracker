@@ -774,22 +774,31 @@ def clear_window():
 
 def make_scrollable_frame(parent):
     """
-    Creates a scrollable area inside a frame.
-    Mouse wheel scrolling works on all child widgets.
+    Creates a vertically scrollable frame.
+
+    - Inner content follows the canvas width.
+    - Mouse-wheel handling is local to this scrollable area.
+    - Text widgets, Treeviews and Listboxes retain their own scrolling.
+    - No application-wide mouse-wheel bindings are installed.
     """
-    outer = tk.Frame(parent, bg="#f0f4f8")
+    background = "#f0f4f8"
+
+    outer = tk.Frame(parent, bg=background)
     outer.pack(fill="both", expand=True)
 
-    canvas = tk.Canvas(outer, bg="#f0f4f8", highlightthickness=0)
-    scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-    scroll_frame = tk.Frame(canvas, bg="#f0f4f8")
-
-    scroll_frame.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    canvas = tk.Canvas(
+        outer,
+        bg=background,
+        highlightthickness=0
+    )
+    scrollbar = ttk.Scrollbar(
+        outer,
+        orient="vertical",
+        command=canvas.yview
     )
 
-    # Keep the canvas item ID so its width can be updated.
+    scroll_frame = tk.Frame(canvas, bg=background)
+
     content_window = canvas.create_window(
         (0, 0),
         window=scroll_frame,
@@ -798,74 +807,137 @@ def make_scrollable_frame(parent):
 
     canvas.configure(yscrollcommand=scrollbar.set)
 
-    def resize_scroll_content(event):
-        # Make the inner frame match the canvas's visible width.
+    scrollbar.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+
+    def update_scroll_region(event=None):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def resize_content(event):
         canvas.itemconfigure(
             content_window,
             width=max(event.width, 1)
         )
 
-    canvas.bind("<Configure>", resize_scroll_content)
+    scroll_frame.bind("<Configure>", update_scroll_region)
+    canvas.bind("<Configure>", resize_content)
 
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    # ← Everything below is now correctly indented INSIDE the function
-    # All these functions can now see 'canvas' properly
+    # A unique bindtag gives this area its own event handler.
+    # It is not an application-wide binding.
+    scroll_tag = f"LocalScroll_{id(canvas)}"
 
     def scroll(event):
-        """
-        Scrolls only while this canvas still exists.
-
-        A screen change can destroy the canvas while a queued
-        mouse-wheel event is still waiting to run.
-        """
         try:
-            if not canvas.winfo_exists():
+            if not canvas.winfo_exists() or not canvas.winfo_ismapped():
                 return
 
-            # Windows normally reports event.delta in multiples of 120.
-            direction = int(-1 * (event.delta / 120))
+            # Do not move short content unnecessarily.
+            first, last = canvas.yview()
+            if first <= 0 and last >= 1:
+                return "break"
 
-            # Some devices may report a smaller delta.
-            if direction == 0:
-                direction = -1 if event.delta > 0 else 1
+            # Linux commonly uses buttons 4 and 5.
+            if getattr(event, "num", None) == 4:
+                units = -1
+            elif getattr(event, "num", None) == 5:
+                units = 1
+            else:
+                delta = getattr(event, "delta", 0)
+                if not delta:
+                    return
 
-            canvas.yview_scroll(direction, "units")
+                if canvas.tk.call("tk", "windowingsystem") == "aqua":
+                    units = -int(delta)
+                else:
+                    units = -int(delta / 120)
+
+                if units == 0:
+                    units = -1 if delta > 0 else 1
+
+            canvas.yview_scroll(units, "units")
+            return "break"
 
         except tk.TclError:
-            # The canvas was destroyed before the queued event finished.
-            # Safely ignore that old event.
+            # Ignore an event queued just before screen destruction.
             return
 
-    def bind_scroll(widget):
-        widget.bind("<MouseWheel>", scroll)
+    wheel_sequences = ("<MouseWheel>", "<Button-4>", "<Button-5>")
+
+    for sequence in wheel_sequences:
+        canvas.bind_class(scroll_tag, sequence, scroll)
+
+    # Preserve native scrolling inside these widgets.
+    native_scroll_classes = {
+        "Text",
+        "Listbox",
+        "Treeview",
+        "Scrollbar",
+        "TScrollbar",
+        "TCombobox",
+        "Spinbox",
+        "TSpinbox"
+    }
+
+    def attach_scroll_tag(widget):
+        widget_class = widget.winfo_class()
+
+        # Preserve native scrolling in text boxes, tables,
+        # dropdowns and other independently scrollable controls.
+        if widget_class in native_scroll_classes:
+            return
+
+        tags = widget.bindtags()
+
+        if scroll_tag not in tags:
+            # Give page scrolling priority over widget-level handlers,
+            # including those installed on embedded chart canvases.
+            widget.bindtags((scroll_tag,) + tags)
+
+        # Include child canvases, such as matplotlib charts and
+        # decorative budget progress canvases.
         for child in widget.winfo_children():
-            bind_scroll(child)
+            attach_scroll_tag(child)
 
-    def on_frame_configure(event):
-        canvas.configure(scrollregion=canvas.bbox("all"))
-        bind_scroll(scroll_frame)
+    timer_id = None
+    destroyed = False
 
-    def on_enter(event):
-        # Only activate scrolling if this canvas still exists.
+    def refresh_child_bindings():
+        nonlocal timer_id
+
+        if destroyed:
+            return
+
         try:
-            if canvas.winfo_exists():
-                root.bind_all("<MouseWheel>", scroll)
+            attach_scroll_tag(canvas)
+            # Forms and Dashboard results can add widgets dynamically.
+            timer_id = outer.after(250, refresh_child_bindings)
         except tk.TclError:
-            pass
+            timer_id = None
 
-    def on_leave(event):
-        # Remove this screen's global mouse-wheel callback.
-        root.unbind_all("<MouseWheel>")
+    def cleanup(event):
+        nonlocal destroyed, timer_id
 
-    canvas.bind("<MouseWheel>", scroll)
-    scroll_frame.bind("<MouseWheel>", scroll)
-    scroll_frame.bind("<Configure>", on_frame_configure)
-    canvas.bind("<Enter>", on_enter)
-    canvas.bind("<Leave>", on_leave)
-    scroll_frame.bind("<Enter>", on_enter)
-    scroll_frame.bind("<Leave>", on_leave)
+        # Destroy events also occur for descendants.
+        if event.widget is not outer:
+            return
+
+        destroyed = True
+
+        if timer_id is not None:
+            try:
+                outer.after_cancel(timer_id)
+            except tk.TclError:
+                pass
+            timer_id = None
+
+        for sequence in wheel_sequences:
+            try:
+                canvas.unbind_class(scroll_tag, sequence)
+            except tk.TclError:
+                pass
+
+    outer.bind("<Destroy>", cleanup, add="+")
+    refresh_child_bindings()
 
     return scroll_frame
 
@@ -4988,20 +5060,10 @@ def show_budget_spending(user_id, budget_id):
         except tk.TclError:
             return
 
-    def enable_popup_scroll(event=None):
-        try:
-            if canvas.winfo_exists():
-                root.bind_all("<MouseWheel>", _on_mousewheel)
-        except tk.TclError:
-            pass
-
-    def disable_popup_scroll(event=None):
-        root.unbind_all("<MouseWheel>")
-
-    canvas.bind("<Enter>", enable_popup_scroll)
-    canvas.bind("<Leave>", disable_popup_scroll)
-    scroll_frame.bind("<Enter>", enable_popup_scroll)
-    scroll_frame.bind("<Leave>", disable_popup_scroll)
+    # Local scrolling only. Child cards can still be scrolled
+    # using the visible scrollbar.
+    canvas.bind("<MouseWheel>", _on_mousewheel)
+    scroll_frame.bind("<MouseWheel>", _on_mousewheel)
 
     # ── Display each transaction ──────────────────────────────
     if not transactions:
@@ -5078,8 +5140,6 @@ def show_budget_spending(user_id, budget_id):
     # ── Close button ──────────────────────────────────────────
 
     def close_popup():
-        # Remove the popup's global scrolling callback first.
-        root.unbind_all("<MouseWheel>")
         popup.destroy()
 
     # Use the same cleanup if the user clicks the window's X button.
@@ -7816,20 +7876,10 @@ def show_recurring_history(user_id, rec_id, rec_name):
         except tk.TclError:
             return
 
-    def enable_popup_scroll(event=None):
-        try:
-            if canvas.winfo_exists():
-                root.bind_all("<MouseWheel>", _on_mousewheel)
-        except tk.TclError:
-            pass
-
-    def disable_popup_scroll(event=None):
-        root.unbind_all("<MouseWheel>")
-
-    canvas.bind("<Enter>", enable_popup_scroll)
-    canvas.bind("<Leave>", disable_popup_scroll)
-    scroll_frame.bind("<Enter>", enable_popup_scroll)
-    scroll_frame.bind("<Leave>", disable_popup_scroll)
+    # Local scrolling only. Child cards can still be scrolled
+    # using the visible scrollbar.
+    canvas.bind("<MouseWheel>", _on_mousewheel)
+    scroll_frame.bind("<MouseWheel>", _on_mousewheel)
 
     # ── Display each transaction ──────────────────────────────
     if not history:
@@ -7925,8 +7975,6 @@ def show_recurring_history(user_id, rec_id, rec_name):
     # ── Close button ──────────────────────────────────────────
 
     def close_popup():
-        # Remove the popup's global scrolling callback first.
-        root.unbind_all("<MouseWheel>")
         popup.destroy()
 
     # Use the same cleanup if the user clicks the window's X button.
@@ -10173,20 +10221,10 @@ def show_subscription_payments(user_id, sub_id, sub_name):
         except tk.TclError:
             return
 
-    def enable_popup_scroll(event=None):
-        try:
-            if canvas.winfo_exists():
-                root.bind_all("<MouseWheel>", _on_mousewheel)
-        except tk.TclError:
-            pass
-
-    def disable_popup_scroll(event=None):
-        root.unbind_all("<MouseWheel>")
-
-    canvas.bind("<Enter>", enable_popup_scroll)
-    canvas.bind("<Leave>", disable_popup_scroll)
-    scroll_frame.bind("<Enter>", enable_popup_scroll)
-    scroll_frame.bind("<Leave>", disable_popup_scroll)
+    # Local scrolling only. Child cards can still be scrolled
+    # using the visible scrollbar.
+    canvas.bind("<MouseWheel>", _on_mousewheel)
+    scroll_frame.bind("<MouseWheel>", _on_mousewheel)
 
     # ── Display each payment ──────────────────────────────────
     if not payments:
@@ -10265,8 +10303,6 @@ def show_subscription_payments(user_id, sub_id, sub_name):
     btn_bar.pack(fill="x", padx=15)
 
     def close_popup():
-        # Remove the popup's global scrolling callback first.
-        root.unbind_all("<MouseWheel>")
         popup.destroy()
 
     # Use the same cleanup if the user clicks the window's X button.
@@ -14832,7 +14868,6 @@ def show_budget_alert_popup(user_id, alerts):
     def close_popup():
         # The existing scrollable-frame helper uses a global
         # mouse-wheel binding. Clear it before destroying the canvas.
-        root.unbind_all("<MouseWheel>")
         popup.destroy()
 
     def on_view_budgets():
