@@ -3927,6 +3927,86 @@ def get_data_quality_report(user_id, reference_date=None):
         )
     }
 
+def record_monthly_budget_settings(
+    conn,
+    user_id,
+    budget_id,
+    reference_date=None
+):
+    """
+    Records the current month's settings for a monthly budget.
+
+    Uses the caller's existing connection so the history is saved
+    in the same database transaction as the budget change.
+
+    Returns the effective month, or None if the budget is not monthly.
+    """
+    import math
+
+    if reference_date is None:
+        reference_date = datetime.today().date()
+
+    effective_month = reference_date.replace(day=1)
+
+    budget = conn.execute(
+        '''SELECT timeframe, amount, category
+           FROM budgets
+           WHERE id = ? AND user_id = ?''',
+        (budget_id, user_id)
+    ).fetchone()
+
+    if budget is None:
+        raise ValueError(
+            "The budget could not be found for this user."
+        )
+
+    timeframe, stored_amount, category = budget
+
+    # Settings history currently applies to monthly budgets only.
+    if timeframe != "Monthly":
+        return None
+
+    try:
+        amount = float(stored_amount)
+
+        if not math.isfinite(amount) or amount <= 0:
+            raise ValueError
+
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(
+            "The budget limit must be a finite amount greater than zero "
+            "before its settings history can be recorded."
+        ) from None
+
+    category_text = (category or "").strip()
+
+    if not category_text:
+        raise ValueError(
+            "The budget must have a category scope before its "
+            "settings history can be recorded."
+        )
+
+    # Replace this month's settings without altering earlier months.
+    conn.execute(
+        '''INSERT INTO budget_monthly_history
+               (user_id, budget_id, effective_month, amount, category)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(budget_id, effective_month)
+           DO UPDATE SET
+               amount = excluded.amount,
+               category = excluded.category,
+               user_id = excluded.user_id''',
+        (
+            user_id,
+            budget_id,
+            effective_month.isoformat(),
+            amount,
+            category_text
+        )
+    )
+
+    return effective_month.isoformat()
+
 def get_budget_month_expenses(user_id, budget_id, month_start_text):
     """
     Returns the expenses used for one month of the historical review.
