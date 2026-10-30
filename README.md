@@ -386,9 +386,17 @@ financial information. Screenshots may lag behind interface changes.
 
 ![Budgets](assets/screenshots/budgets.png)
 
-### Dashboard
+### Dashboard — Overview
 
-![Dashboard](assets/screenshots/dashboard.png)
+![Dashboard Overview](assets/screenshots/dashboard.png)
+
+### Dashboard — Period Insights
+
+![Dashboard Period Insights](assets/screenshots/dashboard_period_insights.png)
+
+### Dashboard — Current Planning
+
+![Dashboard Current Planning](assets/screenshots/dashboard_current_planning.png)
 
 ### Badges
 
