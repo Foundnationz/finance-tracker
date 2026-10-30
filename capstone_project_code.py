@@ -12063,6 +12063,193 @@ def render_needs_wants_reflection(
         justify="left"
     ).pack(anchor="w", padx=12, pady=(6, 12))
 
+def render_repeated_spending_review(
+    parent,
+    user_id,
+    selected_year,
+    selected_month,
+    reference_date=None
+):
+    """
+    Displays categories with frequently recorded expense entries
+    for the selected report month.
+
+    Reads data only.
+    """
+    section = tk.Frame(
+        parent,
+        bg="#fff5f7",
+        relief="solid",
+        bd=1
+    )
+    section.pack(fill="x", pady=10)
+
+    tk.Label(
+        section,
+        text="Selected-Period Repeated Spending Review",
+        font=("Segoe UI", 12, "bold"),
+        bg="#fff5f7",
+        fg="#97266d"
+    ).pack(anchor="w", padx=12, pady=(10, 4))
+
+    try:
+        result = get_repeated_spending_review(
+            user_id,
+            selected_year,
+            selected_month,
+            reference_date=reference_date
+        )
+    except (sqlite3.Error, ValueError, OverflowError) as error:
+        tk.Label(
+            section,
+            text=f"Repeated spending review is unavailable: {error}",
+            font=("Segoe UI", 9),
+            bg="#fff5f7",
+            fg="#c53030",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+        return
+
+    sym = get_currency(user_id)
+    minimum = result["minimum_entries"]
+
+    tk.Label(
+        section,
+        text=(
+            f"Selected calendar month: {result['period_start']} "
+            f"→ {result['period_last_day']}\n"
+            f"Expense entries counted through: "
+            f"{result['counted_through']}"
+        ),
+        font=("Segoe UI", 9),
+        bg="#fff5f7",
+        fg="#4a5568",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 6))
+
+    tk.Label(
+        section,
+        text=(
+            f"Showing categories with at least {minimum} positive "
+            "expense entries, ranked by recorded total. "
+            f"The {minimum}-entry threshold is an application setting, "
+            "not a financial standard."
+        ),
+        font=("Segoe UI", 8, "italic"),
+        bg="#fff5f7",
+        fg="#718096",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    if result["invalid_amount_count"]:
+        tk.Label(
+            section,
+            text=(
+                "Data-quality notice: "
+                f"{result['invalid_amount_count']} expense record(s) "
+                "with invalid amounts were excluded."
+            ),
+            font=("Segoe UI", 9),
+            bg="#fff5f7",
+            fg="#975a16",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+
+    reviews = result["reviews"]
+
+    if not reviews:
+        tk.Label(
+            section,
+            text=(
+                f"No category reached {minimum} positive expense entries "
+                "in this period. This does not mean spending was low."
+            ),
+            font=("Segoe UI", 10),
+            bg="#fff5f7",
+            fg="#4a5568",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 10))
+
+    for review in reviews:
+        card = tk.Frame(section, bg="white", relief="solid", bd=1)
+        card.pack(fill="x", padx=12, pady=5)
+
+        category = review["category"]
+        category_label = (
+            str(category)
+            if category is not None and str(category).strip()
+            else "Unnamed category"
+        )
+
+        entry_word = (
+            "entry" if review["entry_count"] == 1 else "entries"
+        )
+
+        tk.Label(
+            card,
+            text=f"{category_label}: frequently recorded expenses",
+            font=("Segoe UI", 11, "bold"),
+            bg="white",
+            fg="#2d3748",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(10, 4))
+
+        tk.Label(
+            card,
+            text=(
+                f"Recorded entries: {review['entry_count']} {entry_word}\n"
+                f"Recorded total: {sym}{review['total']:,.2f}\n"
+                f"Average per entry: {sym}{review['average']:,.2f}"
+            ),
+            font=("Segoe UI", 10),
+            bg="white",
+            fg="#4a5568",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10)
+
+        tk.Label(
+            card,
+            text=review["suggestion"],
+            font=("Segoe UI", 9),
+            bg="white",
+            fg="#2d3748",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=10, pady=(6, 10))
+
+    if result["eligible_category_count"] > len(reviews):
+        hidden = result["eligible_category_count"] - len(reviews)
+
+        tk.Label(
+            section,
+            text=(
+                f"{hidden} additional category(ies) also reached the "
+                "entry threshold but are not listed here."
+            ),
+            font=("Segoe UI", 8, "italic"),
+            bg="#fff5f7",
+            fg="#718096",
+            wraplength=600,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 6))
+
+    tk.Label(
+        section,
+        text=result["limitation"],
+        font=("Segoe UI", 8, "italic"),
+        bg="#fff5f7",
+        fg="#718096",
+        wraplength=600,
+        justify="left"
+    ).pack(anchor="w", padx=12, pady=(4, 12))
+
 # ============================================================
 # DASHBOARD SCREEN
 # ============================================================
@@ -12198,6 +12385,14 @@ def show_dashboard(user_id):
         )
 
         render_needs_wants_reflection(
+            results_frame,
+            user_id,
+            selected_year=int(selected_year),
+            selected_month=int(selected_month),
+            reference_date=datetime.today().date()
+        )
+
+        render_repeated_spending_review(
             results_frame,
             user_id,
             selected_year=int(selected_year),
