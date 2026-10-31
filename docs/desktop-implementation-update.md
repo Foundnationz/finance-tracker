@@ -588,6 +588,39 @@ controls, resizing, and Escape-key closing.
 The wishlist contribution planner was deferred. The wishlist remains a
 virtual progress tracker without target-date contribution recommendations.
 
+### Self-Service Account Deletion
+
+Settings now provides a Delete My Account and Data action for the
+currently signed-in user.
+
+The interface requests the user's password, an acknowledgement of the
+permanent-deletion warning, and a final confirmation.
+
+The deletion helper verifies that the requested user matches the active
+session and checks the password against the stored bcrypt hash.
+
+Associated user records are deleted in dependency order within one
+database transaction. Monthly budget history is removed through its
+budget relationship. Other registered users' records are preserved.
+
+The session is cleared only after deletion commits successfully.
+The interface then returns to the welcome screen.
+
+Incorrect passwords and cancelled confirmations do not delete records.
+A simulated database failure test verifies that uncommitted cleanup
+is rolled back.
+
+Saved tests cover authentication rejection, active-user isolation,
+successful deletion of representative dependent records, and rollback.
+Manual temporary-database checks cover the confirmation popup,
+cancellation, return to Welcome, failed login for the deleted account,
+and continued access for another user.
+
+The feature deletes application records, not external exports, backups,
+screenshots, or cloud copies. SQLite record deletion is not guaranteed
+secure erasure of the underlying storage.
+
+
 ## 13. Summary
 
 The post-submission desktop work expands the original prototype with

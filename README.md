@@ -38,6 +38,7 @@ service, or financial advisory platform.
 | ⚙️ Currency Display | Select a display currency from 20 options, including USD, MYR, GBP, and EUR; amounts are not converted |
 | 📥 CSV Export | Export transaction records to a CSV file |
 | 🔒 Password Hashing | Store registered passwords as bcrypt hashes rather than plaintext |
+| 🗑️ Account Deletion | Delete the signed-in user's account and associated application records through Settings, with password verification and explicit confirmation |
 
 ---
 
@@ -485,6 +486,43 @@ not a secured administrative dashboard.
 
 Do not run deletion utilities against real data without a backup.
 
+### Delete Your Account and Data
+
+To delete your registered account:
+
+1. Sign in to the account you want to delete.
+2. Open Settings.
+3. Select Delete My Account and Data.
+4. Enter your password.
+5. Acknowledge the permanent-deletion warning.
+6. Confirm the final deletion request.
+
+Successful deletion removes the signed-in user's associated application
+records, including financial accounts, transactions, tags, budgets,
+monthly budget history, subscriptions, recurring schedules, processed
+occurrences, wishlist items, badges, and settings.
+
+Other registered users' records remain unchanged.
+
+After successful deletion, the application clears the active session
+and returns to the welcome screen.
+
+An incorrect password or cancelled confirmation does not delete the
+account. Database cleanup is committed as one transaction; an error
+before the commit rolls back that attempt.
+
+#### Deletion Limits
+
+- This deletes records from the installation's local database.
+- It does not delete the application or remove the whole database file.
+- Exported CSV files, backups, screenshots, cloud copies, and other
+  external copies are not removed.
+- SQLite record deletion is not guaranteed secure erasure of the
+  underlying storage.
+- A database kept in a cloud-synchronised folder may have external
+  copies or version history managed by that service.
+
+
 ### Database Safety
 
 - `budgeting_app.db` contains local user and financial data.
@@ -549,6 +587,7 @@ The saved suite covers selected scenarios involving:
 - Scheduled transaction generation and duplicate prevention.
 - Monthly budget settings history and historical category scope.
 - Core budget-allowance, category-comparison, and Needs/Wants calculations.
+- Authenticated account deletion, user isolation, and cleanup rollback.
 
 Database tests use a fixture that redirects the application's database
 path to a pytest temporary directory. These tests must request the
@@ -583,6 +622,11 @@ GUI workflow checks covering:
 - Recommendation calculations for allowances, spending comparisons,
   upcoming expenses, subscription costs, and Needs/Wants reflection.
 - Combined Dashboard refresh behavior and read-only operation.
+- Password-confirmed self-service account deletion.
+- Rejection of incorrect passwords and mismatched active sessions.
+- Rollback of user-data cleanup after a simulated database failure.
+- Preservation of another user's records after account deletion.
+- Manual confirmation, cancellation, logout, and subsequent login checks.
 
 A clean-environment installation and application smoke test have passed
 on Windows using Python 3.14.
