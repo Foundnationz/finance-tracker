@@ -186,6 +186,10 @@ These follow the month and year selected in the Dashboard:
   spending increases, ranked by monetary difference.
 - **Needs/Wants reflection:** shows Needs, Wants, and unclassified expense
   totals. Percentages use classified expenses only—not income.
+- **Repeated spending review:** highlights up to three categories with
+  at least five positive expense entries, ranked by recorded total.
+  The threshold is an application rule, not evidence of impulse buying
+  or unnecessary spending.
 
 For the current month, category comparisons use matched elapsed-day
 ranges against the previous month. If the previous month is shorter,
@@ -206,12 +210,18 @@ These use the current date, independently of the selected report month:
 - **Subscription cost review:** estimates unprocessed subscription
   expenses scheduled for the next calendar month using current active
   schedule settings and prices.
+- **Data-quality review:** highlights selected detectable issues, such as
+  unclassified expenses, invalid budget limits, and incomplete schedule links.
+  Some conditions are review prompts rather than proof of incorrect data.
+- **Historical monthly budget review:** compares the three most recent
+  completed months with their applicable recorded monthly limits and
+  category scopes. Months without known settings are excluded.
 
 ### Important Interpretation
 
 - Recommendations do not generate transactions, change balances,
   reserve funds, or automatically modify budgets.
-- Guidance refreshes when the Dashboard opens or Show Dashboard is clicked.
+- Guidance refreshes when the Dashboard opens or Refresh Dashboard is clicked.
 - Missing records, user-supplied classifications, category-name changes,
   and balance adjustments can affect results.
 - Invalid amounts and unevaluable schedules are excluded where detected,
@@ -444,6 +454,7 @@ finance-tracker/
 ├── capstone_project_code.py   # Main desktop application
 ├── requirements.txt           # Third-party Python dependencies
 ├── README.md                  # Project overview and instructions
+├── CONTRIBUTING.md            # Guidelines for contributors
 ├── .gitignore                 # Files excluded from version control
 ├── docs/                      # Academic project report
 └── assets/
@@ -631,6 +642,63 @@ necessarily correspond to published GitHub releases.
 - Added next-calendar-month subscription cost reviews.
 - Tested the combined insights display for refresh behavior and read-only operation.
 - Improved developer user-data cleanup.
+
+---
+
+## 👥 Authors and Contributions
+
+This application originated as a joint Final Year Project by
+**Shawn** and **Farrel**, focused on a financial tracker, budgeting,
+and coaching concept for Generation Z.
+
+The original project was developed before this GitHub repository was
+established. The repository's commit history therefore does not represent
+the full history or division of work on the original project.
+
+### Farrel — Original Concept and Prototype Implementation
+
+Farrel's contributions included:
+
+- Formulating the main FYP title and initial financial tracker,
+  coaching, and budgeting concept for Generation Z.
+- Implementing the original Google Colab application codebase,
+  including database setup and application functionality.
+- Performing administrator-side application testing.
+- Jointly developing ideas for the application's end-to-end behavior
+  and feature workflows.
+- Applying final formatting and structural presentation improvements
+  to the academic report.
+
+Farrel does not currently have a GitHub profile linked to this project.
+
+### Shawn — Design, Report, Testing, and Desktop Development
+
+[Shawn (@Foundnationz)](https://github.com/Foundnationz) contributed:
+
+- Ideas for application improvements and user-facing functionality.
+- User-side application testing.
+- Joint development of the application's end-to-end behavior
+  and feature workflows.
+- Use case diagrams, activity diagrams, and other system-design materials.
+- Most of the academic report's written content.
+- Post-submission development and maintenance of the desktop application,
+  including its migration from the Colab prototype and subsequent
+  enhancements documented in this repository.
+
+### AI-Assisted Development Disclosure
+
+The post-submission desktop development used OpenAI ChatGPT for
+code suggestions, explanations, debugging guidance, testing examples,
+and documentation drafting.
+
+Shawn applied and tested changes during this development process.
+This assistance does not replace or diminish Farrel's authorship of
+the original prototype or the contributors' joint work on the FYP.
+
+### Contributing
+
+For guidance on reporting issues or proposing changes, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
