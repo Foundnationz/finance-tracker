@@ -15114,6 +15114,227 @@ def show_budget_alert_popup(user_id, alerts):
 # (dark mode, font size, default account etc.)
 # ============================================================
 
+def show_delete_my_account_popup(user_id):
+    """
+    Requests password verification and explicit confirmation before
+    permanently deleting the active user's application records.
+    """
+    if current_user is None or current_user[0] != user_id:
+        messagebox.showerror(
+            "Session Unavailable",
+            "Please sign in again before deleting your account.",
+            parent=root
+        )
+        return
+
+    username = current_user[1]
+
+    popup = tk.Toplevel(root)
+    popup.title("Delete My Account and Data")
+    popup.geometry("560x520")
+    popup.minsize(480, 420)
+    popup.configure(bg="#f0f4f8")
+    popup.transient(root)
+
+    def close_popup():
+        popup.destroy()
+
+    popup.protocol("WM_DELETE_WINDOW", close_popup)
+    popup.bind("<Escape>", lambda event: close_popup())
+
+    # Keep the action buttons outside the scrollable content.
+    footer = tk.Frame(popup, bg="#f0f4f8", pady=10)
+    footer.pack(side="bottom", fill="x", padx=15)
+
+    body = make_scrollable_frame(popup)
+
+    tk.Label(
+        body,
+        text="Permanently Delete Your Account",
+        font=("Segoe UI", 15, "bold"),
+        bg="#f0f4f8",
+        fg="#c53030",
+        wraplength=480,
+        justify="left"
+    ).pack(anchor="w", padx=20, pady=(15, 8))
+
+    tk.Label(
+        body,
+        text=(
+            f"Signed in as: {username}\n\n"
+            "This permanently deletes your registered user account "
+            "and its associated accounts, transactions, tags, budgets, "
+            "budget history, subscriptions, recurring schedules, "
+            "processed occurrences, wishlist, badges and settings.\n\n"
+            "Other registered users' records will not be deleted.\n\n"
+            "Exports, backups, screenshots and cloud copies are not "
+            "deleted. Removing database records is not guaranteed "
+            "secure erasure of the underlying storage.\n\n"
+            "This action cannot be undone."
+        ),
+        font=("Segoe UI", 10),
+        bg="#f0f4f8",
+        fg="#4a5568",
+        wraplength=480,
+        justify="left"
+    ).pack(anchor="w", padx=20, pady=(0, 12))
+
+    tk.Label(
+        body,
+        text="Confirm your password:",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f0f4f8"
+    ).pack(anchor="w", padx=20)
+
+    password_entry = make_entry(body, show="*", width=30)
+    password_entry.pack(anchor="w", padx=20, pady=(4, 12))
+
+    acknowledged = tk.BooleanVar(value=False)
+
+    tk.Checkbutton(
+        body,
+        text="I understand that my account and its application data "
+             "will be permanently deleted.",
+        variable=acknowledged,
+        font=("Segoe UI", 9),
+        bg="#f0f4f8",
+        wraplength=460,
+        justify="left",
+        anchor="w"
+    ).pack(anchor="w", padx=20, pady=(0, 8))
+
+    msg_label = tk.Label(
+        body,
+        text="",
+        font=("Segoe UI", 10),
+        bg="#f0f4f8",
+        fg="#c53030",
+        wraplength=480,
+        justify="left"
+    )
+    msg_label.pack(anchor="w", padx=20, pady=(0, 10))
+
+    deleting = False
+
+    def on_delete():
+        nonlocal deleting
+        global current_user
+
+        if deleting:
+            return
+
+        # Recheck the session when the destructive action is requested.
+        if current_user is None or current_user[0] != user_id:
+            msg_label.config(
+                text="Your session no longer matches this account. "
+                     "Close this window and sign in again."
+            )
+            return
+
+        password = password_entry.get()
+
+        if not password:
+            msg_label.config(text="Please enter your password.")
+            return
+
+        if not acknowledged.get():
+            msg_label.config(
+                text="Please acknowledge the permanent-deletion warning."
+            )
+            return
+
+        confirmed = messagebox.askyesno(
+            "Final Confirmation",
+            (
+                f"Permanently delete '{username}' and its "
+                "associated application data?\n\n"
+                "This cannot be undone."
+            ),
+            parent=popup
+        )
+
+        if not confirmed:
+            return
+
+        deleting = True
+        delete_button.config(state="disabled")
+        cancel_button.config(state="disabled")
+
+        try:
+            delete_current_user_data(user_id, password)
+
+        except ValueError as error:
+            password_entry.delete(0, tk.END)
+            msg_label.config(text=str(error))
+            deleting = False
+            delete_button.config(state="normal")
+            cancel_button.config(state="normal")
+            password_entry.focus_set()
+            return
+
+        except sqlite3.Error:
+            import traceback
+            traceback.print_exc()
+
+            password_entry.delete(0, tk.END)
+            msg_label.config(
+                text=(
+                    "Deletion failed. Database changes from this "
+                    "attempt were rolled back. Your session remains open. "
+                    "Review the terminal error before retrying."
+                )
+            )
+            deleting = False
+            delete_button.config(state="normal")
+            cancel_button.config(state="normal")
+            return
+
+        finally:
+            # Drop this callback's reference to the entered password.
+            # This is not a guarantee of secure memory erasure.
+            password = None
+
+        # Clear the active session only after deletion commits.
+        password_entry.delete(0, tk.END)
+        current_user = None
+
+        popup.destroy()
+        show_auth_choice_screen()
+
+        messagebox.showinfo(
+            "Account Deleted",
+            (
+                "Your registered account and associated application "
+                "records were deleted.\n\n"
+                "External exports, backups and cloud copies were "
+                "not removed."
+            ),
+            parent=root
+        )
+
+    cancel_button = make_button(
+        footer,
+        "Cancel",
+        close_popup,
+        color="#718096",
+        width=12
+    )
+    cancel_button.pack(side="left", padx=5)
+
+    delete_button = make_button(
+        footer,
+        "Delete My Account",
+        on_delete,
+        color="#c53030",
+        width=20
+    )
+    delete_button.pack(side="right", padx=5)
+
+    # Enter does not trigger this destructive action automatically.
+    popup.wait_visibility()
+    popup.grab_set()
+    password_entry.focus_set()
+
 def show_settings(user_id):
     clear_window()
 
@@ -15200,6 +15421,48 @@ def show_settings(user_id):
             text=f"✅ Currency set to {code} ({symbol})",
             fg="green"
         )
+
+        # ── Privacy and account deletion ──────────────────────────
+    privacy_section = tk.Frame(
+        body,
+        bg="white",
+        relief="solid",
+        bd=1
+    )
+    privacy_section.pack(fill="x", pady=10)
+
+    tk.Label(
+        privacy_section,
+        text="Privacy & Data",
+        font=("Segoe UI", 12, "bold"),
+        bg="white",
+        fg="#2d3748"
+    ).pack(anchor="w", padx=15, pady=(12, 4))
+
+    tk.Label(
+        privacy_section,
+        text=(
+            "Your financial information is stored in this installation's "
+            "local SQLite database. This application does not "
+            "automatically upload it to the project repository.\n\n"
+            "You can permanently delete your registered account and "
+            "its associated records. Other users' records are preserved. "
+            "Copies in exports, backups or cloud storage are not removed."
+        ),
+        font=("Segoe UI", 9),
+        bg="white",
+        fg="#718096",
+        wraplength=500,
+        justify="left"
+    ).pack(anchor="w", padx=15, pady=(0, 10))
+
+    make_button(
+        privacy_section,
+        "Delete My Account and Data",
+        lambda: show_delete_my_account_popup(user_id),
+        color="#c53030",
+        width=28
+    ).pack(anchor="w", padx=15, pady=(0, 12))
 
     btn_frame = tk.Frame(body, bg="#f0f4f8")
     btn_frame.pack(pady=10)
