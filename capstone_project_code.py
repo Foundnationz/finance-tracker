@@ -15234,6 +15234,68 @@ def get_all_usernames():
     else:
         print("No users found.")
 
+def delete_current_user_data(user_id, password):
+    """
+    Permanently deletes the active user's database records after
+    verifying their password.
+
+    Does not display dialogs or change the UI/session.
+    The UI must clear the session after successful deletion.
+
+    Returns True after a successful commit.
+    Raises ValueError for authentication/session problems.
+    Raises sqlite3.Error if database cleanup fails.
+    """
+    if current_user is None or current_user[0] != user_id:
+        raise ValueError(
+            "The active session does not match this account. "
+            "Please sign in again."
+        )
+
+    if not password:
+        raise ValueError("Please enter your password.")
+
+    with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+
+        row = conn.execute(
+            "SELECT password FROM users WHERE id = ?",
+            (user_id,)
+        ).fetchone()
+
+        if row is None:
+            raise ValueError("This user account no longer exists.")
+
+        try:
+            password_matches = verify_password(password, row[0])
+        except (ValueError, TypeError):
+            password_matches = False
+
+        if not password_matches:
+            raise ValueError("The password is incorrect.")
+
+        # Use the existing ordered cleanup.
+        # Deleting budgets also removes their monthly history through
+        # ON DELETE CASCADE.
+        for table in USER_DATA_DELETE_ORDER:
+            conn.execute(
+                f'DELETE FROM "{table}" WHERE user_id = ?',
+                (user_id,)
+            )
+
+        cursor = conn.execute(
+            "DELETE FROM users WHERE id = ?",
+            (user_id,)
+        )
+
+        if cursor.rowcount != 1:
+            raise ValueError(
+                "The user account could not be deleted."
+            )
+
+        conn.commit()
+
+    return True
 
 def delete_user_by_username(username):
     """
