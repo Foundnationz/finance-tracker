@@ -214,7 +214,19 @@ Increasing spending is not automatically evidence of poor financial behavior.
 
 ## 8. Checks Before Submitting
 
-At minimum, run:
+Install the application and development dependencies:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
+Run the saved automated tests from the repository's main folder:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Also check syntax and package dependencies:
 
 ```powershell
 .\.venv\Scripts\python.exe -m py_compile capstone_project_code.py
@@ -224,22 +236,41 @@ At minimum, run:
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Also run relevant calculation tests and manually check affected workflows
-using temporary data.
+### Database Test Safety
 
-Examples include:
+Database tests must request the `temporary_app` fixture from
+`tests/conftest.py` before calling application database functions.
+
+The fixture redirects `db_path` before database setup and restores it
+afterward. Do not bypass it or point tests at a real financial database.
+
+Application import must remain free of GUI startup and normal-database
+access. If startup or configuration changes, verify test isolation too.
+
+### Coverage and Manual Checks
+
+The saved suite covers selected date, database, scheduling, budget-history,
+and recommendation scenarios. It is not complete application coverage.
+
+Manually test affected GUI workflows using temporary data, including:
 
 - Empty and populated screens.
 - Invalid input.
-- Date boundaries and leap years.
-- User-data separation.
-- Duplicate schedule processing.
-- Correct balance reversal after transaction deletion.
-- Read-only behavior of insights and history screens.
-- Navigation, resizing, and mouse-wheel scrolling.
+- Navigation and screen refresh.
+- Resizing and mouse-wheel scrolling.
+- Popup opening and closing.
+- Chart rendering.
+- Confirmation and cancellation behavior.
 
-A maintained automated test suite is a future improvement. Until one is
-available, describe precisely which checks you performed.
+Add or update regression tests when changing financial calculations,
+database behavior, or scheduling rules.
+
+Do not change expected test results merely to make a failure disappear.
+Investigate whether the failure reflects a defect or an intentional
+behavior change.
+
+A pull request should state which automated and manual checks were run,
+their results, and any known gaps.
 
 Do not claim a test passed unless you ran it.
 

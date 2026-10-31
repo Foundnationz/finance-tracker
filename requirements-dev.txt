@@ -1,5 +1,5 @@
-# Install the application's dependencies.
+# Application dependencies
 -r requirements.txt
 
-# Additional tool for running automated tests.
-pytest
+# Automated testing tool
+pytest==9.2.0

@@ -522,6 +522,38 @@ requires separate action.
 
 ## 🧪 Testing
 
+### Run the Saved Automated Tests
+
+From the repository's main folder on Windows:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+The saved suite covers selected scenarios involving:
+
+- Calendar and subscription billing-date calculations.
+- Database setup, foreign-key enforcement, and repeated initialisation.
+- Scheduled transaction generation and duplicate prevention.
+- Monthly budget settings history and historical category scope.
+- Core budget-allowance, category-comparison, and Needs/Wants calculations.
+
+Database tests use a fixture that redirects the application's database
+path to a pytest temporary directory. These tests must request the
+`temporary_app` fixture before accessing application database functions.
+
+The saved tests do not open the Tkinter interface. GUI navigation,
+scrolling, chart rendering, and other interactive behavior require
+separate manual checks.
+
+This is a growing regression suite, not complete application coverage.
+
+### Additional Development Checks
+
 Development checks have included temporary-database tests and manual
 GUI workflow checks covering:
 
@@ -551,8 +583,8 @@ These checks provide evidence for the tested scenarios.
 They do not establish that the application is free of bugs,
 production-ready, or suitable for regulated financial services.
 
-A complete automated test suite, broader platform testing, and verification
-of additional edge cases remain areas for improvement.
+Broader automated coverage, platform testing, and verification of
+additional edge cases remain areas for improvement.
 
 ---
 
