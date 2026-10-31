@@ -237,7 +237,10 @@ Due occurrences are checked at the next login.
 
 ## 8. Dashboard Recommendation Module
 
-The desktop Dashboard includes five explainable recommendation features.
+The desktop Dashboard includes explainable rule-based financial guidance
+and data-quality review. The initial five features described below were
+later extended with repeated spending review, consolidated data-quality
+notices, and historical monthly budget review.
 
 The module applies explicit rules to recorded data. It does not learn
 from training data or retrieve and adapt previous cases.
@@ -326,17 +329,36 @@ These percentages must not be compared directly with the 50/30/20
 income-allocation guideline, because the calculation does not use income,
 savings, and debt allocations as its denominator.
 
+### Additional Insight and Review Features
+
+The initial five features were subsequently extended with:
+
+- **Repeated spending review:** highlights up to three categories with
+  at least five positive expense entries in the selected report period,
+  ranked by recorded total. This threshold is an application rule,
+  not evidence of unnecessary or impulsive spending.
+- **Consolidated data-quality review:** brings selected detectable issues
+  and review prompts into one current-date panel. It does not establish
+  that records are complete or correct.
+- **Historical monthly budget review:** examines the three most recent
+  completed months using applicable recorded monthly limits and category
+  scopes. Unknown historical settings are excluded rather than guessed.
+  Months with known settings provide a read-only expense drill-down.
+
 ### Selected-Period and Current Guidance
 
 The Dashboard separates:
 
-| Insight | Time Basis |
+| Insight or Review | Time Basis |
 |---|---|
 | Category spending comparison | Selected report month |
 | Needs/Wants reflection | Selected report month |
-| Daily budget allowance | Current date |
-| Upcoming scheduled expenses | Current seven-day window |
+| Repeated spending review | Selected report month |
+| Data-quality review | Current checks; classification checks cover the current month through today |
+| Daily budget allowance | Current calendar budget period through today |
+| Upcoming scheduled expenses | Current seven-day window, including today |
 | Subscription cost review | Next calendar month |
+| Historical monthly budget review | Three most recent completed calendar months |
 
 Current guidance remains independent of a historical report month.
 
