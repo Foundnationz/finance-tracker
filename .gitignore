@@ -23,3 +23,6 @@ desktop.ini
 
 # macOS system files
 .DS_Store
+
+# Automated test cache
+.pytest_cache/
