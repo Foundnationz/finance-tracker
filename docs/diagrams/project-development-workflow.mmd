@@ -1,0 +1,82 @@
+---
+config:
+  layout: dagre
+  flowchart:
+    nodeSpacing: 25
+    rankSpacing: 35
+    curve: linear
+  themeVariables:
+    fontSize: "15px"
+---
+flowchart TB
+
+    subgraph ROW1["PHASE A — ORIGINAL FINAL YEAR PROJECT · Steps 1–3"]
+        direction LR
+
+        A["1. Problem Identification<br/>Identify Gen Z financial-management challenges"]
+
+        B["2. Literature Review<br/>Review existing apps, research, and budgeting approaches"]
+
+        C["3. Requirements and Planning<br/>Define objectives, scope, requirements, and milestones"]
+
+        A --> B --> C
+    end
+
+    subgraph ROW2["PHASE A — ORIGINAL FINAL YEAR PROJECT · Steps 4–6"]
+        direction LR
+
+        D["4. System Design<br/>Design workflows, interfaces, diagrams, and database"]
+
+        E["5. Colab Prototype Development<br/>Implement Python, ipywidgets, and SQLite prototype"]
+
+        F["6. Prototype Testing and Report Submission<br/>Evaluate the prototype and submit the academic report"]
+
+        D --> E --> F
+    end
+
+    subgraph ROW3["PHASE B — POST-SUBMISSION DESKTOP DEVELOPMENT · Steps 7–10"]
+        direction LR
+
+        G["7. Desktop Migration<br/>Develop a local Tkinter application using VSCode"]
+
+        H["8. Functional and Security Improvements<br/>Add password hashing, editing, richer records, and exports"]
+
+        I["9. Scheduling and Budget Refinement<br/>Unify schedules, prevent duplicates, and record monthly budget settings"]
+
+        J["10. Recommendation Module Development<br/>Add explainable, rule-based financial guidance"]
+
+        G --> H --> I --> J
+    end
+
+    subgraph ROW4["PHASE B — POST-SUBMISSION DESKTOP DEVELOPMENT · Steps 11–13"]
+        direction LR
+
+        K["11. Usability and Privacy Improvements<br/>Introduce Dashboard tabs, daily charts, scrolling fixes, and account deletion"]
+
+        L["12. Testing, Documentation, and Repository Preparation<br/>Run isolated tests, verify installation, and document contributions"]
+
+        M["13. Maintenance and Future Development<br/>Maintain the prototype and assess future enhancements"]
+
+        K --> L --> M
+    end
+
+    ROW1 --> ROW2
+    ROW2 --> ROW3
+    ROW3 --> ROW4
+
+    N["Scope Note<br/>Later desktop features were not part of the<br/>original prototype's reported user acceptance testing"]
+
+    ROW4 -.-> N
+
+    classDef original fill:#EAF2FF,stroke:#2563EB,color:#172554,stroke-width:2px;
+    classDef desktop fill:#ECFDF5,stroke:#059669,color:#064E3B,stroke-width:2px;
+    classDef note fill:#FFFBEB,stroke:#D97706,color:#78350F,stroke-width:1px;
+
+    class A,B,C,D,E,F original;
+    class G,H,I,J,K,L,M desktop;
+    class N note;
+
+    style ROW1 fill:#F5F8FF,stroke:#93B4F5
+    style ROW2 fill:#F5F8FF,stroke:#93B4F5
+    style ROW3 fill:#F2FCF7,stroke:#75C9A5
+    style ROW4 fill:#F2FCF7,stroke:#75C9A5

@@ -688,6 +688,18 @@ to the submitted academic report.
 
 ---
 
+## 🧭 Project Development Workflow
+
+The diagram summarises the original Final Year Project and the later
+desktop development. It presents the major stages; development within
+those stages was iterative.
+
+![Project development workflow showing the original FYP and post-submission desktop development](docs/diagrams/project-development-workflow.svg)
+
+[Open the full-size SVG](docs/diagrams/project-development-workflow.svg)
+
+Later desktop features were not part of the original prototype's
+reported user acceptance testing.
 
 ---
 
