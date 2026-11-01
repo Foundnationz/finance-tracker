@@ -1270,102 +1270,249 @@ def show_login_screen():
 def show_register_screen():
     clear_window()
 
-    outer = tk.Frame(root, bg="#f0f4f8")
-    outer.pack(expand=True, fill="both", padx=60, pady=30)
+    background = "#f0f4f8"
 
-    make_label(outer, "📝 Create Account", font_size=18, bold=True, color="#2b6cb0").pack(pady=(10, 20))
+    outer = tk.Frame(root, bg=background)
+    outer.pack(
+        expand=True,
+        fill="both",
+        padx=25,
+        pady=20
+    )
 
-    # Form card
+    make_label(
+        outer,
+        "📝 Create Account",
+        font_size=18,
+        bold=True,
+        color="#2b6cb0"
+    ).pack(pady=(10, 15))
+
+    # ── Form card ─────────────────────────────────────────────
     card = tk.Frame(outer, bg="white", relief="solid", bd=1)
-    card.pack(fill="x", padx=20, pady=10)
+    card.pack(fill="x", padx=10, pady=10)
     card.columnconfigure(1, weight=1)
 
     fields = [
-        ("Username:", False),   # (label text, is_password?)
+        ("Username:", False),
         ("Email:", False),
         ("Password:", True),
+        ("Confirm Password:", True),
     ]
 
     entries = []
-    for i, (label_text, is_pass) in enumerate(fields):
-        tk.Label(card, text=label_text, font=("Segoe UI", 10, "bold"),
-                 bg="white", fg="#4a5568").grid(row=i, column=0, sticky="w",
-                                                padx=20, pady=(20 if i == 0 else 8, 8))
-        entry = make_entry(card, show="*" if is_pass else None, width=35)
-        entry.grid(row=i, column=1, padx=20, pady=(20 if i == 0 else 8, 8), sticky="ew")
+    password_controls = []
+
+    for row, (label_text, is_password) in enumerate(fields):
+        row_padding = (15, 8) if row == 0 else (8, 8)
+
+        tk.Label(
+            card,
+            text=label_text,
+            font=("Segoe UI", 10, "bold"),
+            bg="white",
+            fg="#4a5568"
+        ).grid(
+            row=row,
+            column=0,
+            sticky="w",
+            padx=(15, 10),
+            pady=row_padding
+        )
+
+        entry = make_entry(
+            card,
+            show="*" if is_password else None,
+            width=25
+        )
+        entry.grid(
+            row=row,
+            column=1,
+            sticky="ew",
+            padx=(0, 8),
+            pady=row_padding
+        )
         entries.append(entry)
 
-    username_entry, email_entry, password_entry = entries
+        if is_password:
+            visibility_button = tk.Button(
+                card,
+                text="Show",
+                font=("Segoe UI", 9),
+                width=6,
+                takefocus=True
+            )
 
-    # Password requirements hint shown below form
-    hint_frame = tk.Frame(outer, bg="#fffbeb", relief="solid", bd=1)
-    hint_frame.pack(fill="x", padx=20, pady=5)
+            def toggle_visibility(
+                selected_entry=entry,
+                selected_button=visibility_button
+            ):
+                is_hidden = bool(selected_entry.cget("show"))
+
+                selected_entry.config(
+                    show="" if is_hidden else "*"
+                )
+                selected_button.config(
+                    text="Hide" if is_hidden else "Show"
+                )
+
+            visibility_button.config(command=toggle_visibility)
+            visibility_button.grid(
+                row=row,
+                column=2,
+                padx=(0, 15),
+                pady=row_padding
+            )
+
+            password_controls.append(
+                (entry, visibility_button)
+            )
+
+    (
+        username_entry,
+        email_entry,
+        password_entry,
+        confirm_password_entry
+    ) = entries
+
+    # ── Password requirements ─────────────────────────────────
+    hint_frame = tk.Frame(
+        outer,
+        bg="#fffbeb",
+        relief="solid",
+        bd=1
+    )
+    hint_frame.pack(fill="x", padx=10, pady=5)
+
     tk.Label(
         hint_frame,
-        text="🔒 Password must be 8+ chars with 1 uppercase, 1 number, 1 symbol (e.g. Secure*123)",
-        font=("Segoe UI", 9), bg="#fffbeb", fg="#744210", wraplength=500, pady=8
-    ).pack()
+        text=(
+            "Password must have 8+ characters, at least one uppercase "
+            "letter, one number, and one symbol.\n"
+            "Both password entries must match exactly."
+        ),
+        font=("Segoe UI", 9),
+        bg="#fffbeb",
+        fg="#744210",
+        wraplength=500,
+        justify="left",
+        padx=10,
+        pady=8
+    ).pack(anchor="w")
 
-    msg_label = tk.Label(outer, text="", font=("Segoe UI", 10),
-                         bg="#f0f4f8", fg="red", wraplength=450)
+    msg_label = tk.Label(
+        outer,
+        text="",
+        font=("Segoe UI", 10),
+        bg=background,
+        fg="red",
+        wraplength=500,
+        justify="left"
+    )
     msg_label.pack(pady=8)
 
     def on_register():
-        """
-        Validates all fields in order and registers the user if valid.
-        """
         username = username_entry.get().strip()
         email = email_entry.get().strip()
+
+        # Do not strip or otherwise alter either password.
         password = password_entry.get()
+        confirmation = confirm_password_entry.get()
 
-        # Check no fields are empty
-        if not username or not email or not password:
-            msg_label.config(text="❌ Please fill in all fields.", fg="red")
-            return
-
-        # Check username length
-        if not is_valid_username(username):
-            msg_label.config(text="❌ Username must be 6 to 10 characters long.", fg="red")
-            return
-
-        # Check username not taken
-        if username_exists(username):
-            msg_label.config(text="❌ Username already taken. Please choose another.", fg="red")
-            return
-
-        # Check email format
-        if not is_valid_email(email):
-            msg_label.config(text="❌ Please enter a valid email address.", fg="red")
-            return
-
-        # Check password strength
-        if not is_valid_password(password):
+        if not username or not email or not password or not confirmation:
             msg_label.config(
-                text="❌ Password must have 8+ chars, 1 uppercase, 1 number, 1 symbol.",
+                text="❌ Please fill in all fields, including Confirm Password.",
                 fg="red"
             )
             return
 
-        # All checks passed — register the user
-        success, message = register_user(username, email, password)
+        if password != confirmation:
+            msg_label.config(
+                text="❌ The passwords do not match. Please check both fields.",
+                fg="red"
+            )
+            confirm_password_entry.focus_set()
+            return
+
+        if not is_valid_username(username):
+            msg_label.config(
+                text="❌ Username must be 6 to 10 characters long.",
+                fg="red"
+            )
+            return
+
+        if username_exists(username):
+            msg_label.config(
+                text="❌ Username already taken. Please choose another.",
+                fg="red"
+            )
+            return
+
+        if not is_valid_email(email):
+            msg_label.config(
+                text="❌ Please enter a valid email address.",
+                fg="red"
+            )
+            return
+
+        if not is_valid_password(password):
+            msg_label.config(
+                text=(
+                    "❌ Password must have 8+ characters, one uppercase "
+                    "letter, one number, and one symbol."
+                ),
+                fg="red"
+            )
+            return
+
+        # bcrypt directly supports passwords up to 72 UTF-8 bytes.
+        # Reject longer input explicitly rather than allowing a hash error.
+        if len(password.encode("utf-8")) > 72:
+            msg_label.config(
+                text="❌ Password must be no more than 72 UTF-8 bytes.",
+                fg="red"
+            )
+            return
+
+        success, message = register_user(
+            username,
+            email,
+            password
+        )
+
         if success:
             msg_label.config(text=message, fg="green")
+
+            # Remove password text and restore hidden mode.
+            for entry, visibility_button in password_controls:
+                entry.delete(0, tk.END)
+                entry.config(show="*")
+                visibility_button.config(text="Show")
         else:
             msg_label.config(text=message, fg="red")
 
-    btn_frame = tk.Frame(outer, bg="#f0f4f8")
-    btn_frame.pack(pady=15)
-    make_button(btn_frame, "📝  Register", on_register, color="#3182ce").pack(side="left", padx=8)
-
     def go_back():
-        root.unbind("<Return>")       # ← Remove the Enter binding first
-        show_auth_choice_screen()     # ← Then navigate away
+        root.unbind("<Return>")
+        show_auth_choice_screen()
+
+    btn_frame = tk.Frame(outer, bg=background)
+    btn_frame.pack(pady=12)
 
     make_button(
-        btn_frame, "← Back",
-        go_back,                      # ← Use go_back not show_auth_choice_screen directly
+        btn_frame,
+        "📝 Register",
+        on_register,
+        color="#3182ce"
+    ).pack(side="left", padx=8)
+
+    make_button(
+        btn_frame,
+        "← Back",
+        go_back,
         color="#718096"
     ).pack(side="left", padx=8)
+
+    username_entry.focus_set()
 
 
 # ============================================================
