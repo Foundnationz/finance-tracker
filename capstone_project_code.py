@@ -1199,19 +1199,46 @@ def show_login_screen():
     tk.Label(card, text="Username:",
              font=("Segoe UI", 10, "bold"),
              bg="white", fg="#4a5568").grid(
-             row=0, column=0, sticky="w", padx=20, pady=(20, 8))
-    username_entry = make_entry(card, width=35)
-    username_entry.grid(row=0, column=1, padx=20,
+             row=0, column=0, sticky="w", padx=(20, 10), pady=(20, 8))
+    username_entry = make_entry(card, width=25)
+    username_entry.grid(row=0, column=1, padx=(0, 8),
                         pady=(20, 8), sticky="ew")
 
     # Password field
     tk.Label(card, text="Password:",
              font=("Segoe UI", 10, "bold"),
              bg="white", fg="#4a5568").grid(
-             row=1, column=0, sticky="w", padx=20, pady=8)
-    password_entry = make_entry(card, show="*", width=35)
-    password_entry.grid(row=1, column=1, padx=20,
+             row=1, column=0, sticky="w", padx=(20, 10), pady=8)
+
+    password_entry = make_entry(card, show="*", width=25)
+    password_entry.grid(row=1, column=1, padx=(0, 8),
                         pady=8, sticky="ew")
+
+    password_visibility_button = tk.Button(
+        card,
+        text="Show",
+        font=("Segoe UI", 9),
+        width=6,
+        takefocus=True
+    )
+
+    def toggle_password_visibility():
+        is_hidden = bool(password_entry.cget("show"))
+
+        password_entry.config(show="" if is_hidden else "*")
+        password_visibility_button.config(
+            text="Hide" if is_hidden else "Show"
+        )
+
+    password_visibility_button.config(
+        command=toggle_password_visibility
+    )
+    password_visibility_button.grid(
+        row=1,
+        column=2,
+        padx=(0, 20),
+        pady=8
+    )
 
     # Message label — shows errors or success
     msg_label = tk.Label(outer, text="",
@@ -1237,6 +1264,8 @@ def show_login_screen():
         else:
             msg_label.config(
                 text="❌ Invalid username or password.", fg="red")
+            password_entry.config(show="*")
+            password_visibility_button.config(text="Show")
 
     def go_back():
         root.unbind("<Return>")       # Clean up binding before leaving
