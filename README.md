@@ -669,6 +669,12 @@ additional edge cases remain areas for improvement.
 
 ---
 
+The original Google Colab prototype is preserved for historical
+reference in
+[`docs/original-colab-prototype/`](docs/original-colab-prototype/README.md).
+
+---
+
 ## 📄 Project Report and Development Update
 
 The submitted academic project report is available in the
